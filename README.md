@@ -165,7 +165,7 @@ addr, _ := res.PickAddress("WEB")   // "10.0.0.5:8080"
 
 Strategies: `RoundRobin`, `Random`, `Weighted`.
 
-If you use Claude Code, the **`/discovery2-client`** skill wires it up for you.
+If you use Claude Code, the **`/ax-discovery2-client`** skill walks you through the integration interactively.
 
 ## Development
 

@@ -351,6 +351,8 @@ the client doesn't import server internals.
 If a wire change is non-trivial, prefer additive-only changes for one release
 to give the client time to catch up.
 
-There's a Claude Code skill (`/discovery2-client`, at
-`~/.claude/skills/discovery2-client/SKILL.md`) for wiring the client into a
+There's a Claude Code skill (`/ax-discovery2-client`, at
+`~/.claude/skills/ax-discovery2-client/SKILL.md`) for wiring the client into a
 user's Go app — invoke it rather than re-deriving the integration each time.
+The skill asks the user a few questions (register / resolve / both, liveness
+mode, config source) before scaffolding.
