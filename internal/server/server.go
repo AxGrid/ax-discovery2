@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -223,6 +224,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	api.HandleFunc("PUT /v1/services/{name}", s.putService)
 	api.HandleFunc("GET /v1/services/{name}", s.getService)
 	api.HandleFunc("DELETE /v1/services/{name}", s.deleteService)
+	api.HandleFunc("GET /v1/tags", s.listTags)
 
 	api.HandleFunc("GET /v1/services/{name}/instances", s.listInstances)
 	api.HandleFunc("POST /v1/services/{name}/instances", s.registerInstance)
@@ -240,6 +242,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	api.HandleFunc("POST /v1/services/{name}/rename", s.renameService)
 
 	// Discovery + cluster + watch
+	api.HandleFunc("GET /v1/discover", s.discoverByTag)
 	api.HandleFunc("GET /v1/discover/{name}", s.discover)
 	api.HandleFunc("GET /v1/cluster/members", s.clusterMembers)
 	api.HandleFunc("POST /v1/cluster/join", s.clusterJoin)
@@ -282,7 +285,61 @@ func (s *Server) listServices(w http.ResponseWriter, r *http.Request) {
 	if svcs == nil {
 		svcs = []model.Service{}
 	}
+	if tag := strings.TrimSpace(r.URL.Query().Get("tag")); tag != "" {
+		svcs = filterServicesByTag(svcs, tag)
+	}
 	writeJSON(w, http.StatusOK, svcs)
+}
+
+// TagCount is one row of the /v1/tags response: a tag and how many services
+// carry it.
+type TagCount struct {
+	Tag   string `json:"tag"`
+	Count int    `json:"count"`
+}
+
+// listTags returns the union of tags across all services, sorted alphabetically,
+// with a service-count for each. Useful for tag-filter pickers in the UI.
+func (s *Server) listTags(w http.ResponseWriter, r *http.Request) {
+	if !requireRead(w, r) {
+		return
+	}
+	svcs, err := s.store.ListServices()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	counts := make(map[string]int)
+	for _, svc := range svcs {
+		seen := make(map[string]bool)
+		for _, t := range svc.Tags {
+			t = strings.TrimSpace(t)
+			if t == "" || seen[t] {
+				continue
+			}
+			seen[t] = true
+			counts[t]++
+		}
+	}
+	out := make([]TagCount, 0, len(counts))
+	for tag, n := range counts {
+		out = append(out, TagCount{Tag: tag, Count: n})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Tag < out[j].Tag })
+	writeJSON(w, http.StatusOK, out)
+}
+
+func filterServicesByTag(svcs []model.Service, tag string) []model.Service {
+	out := make([]model.Service, 0, len(svcs))
+	for _, svc := range svcs {
+		for _, t := range svc.Tags {
+			if t == tag {
+				out = append(out, svc)
+				break
+			}
+		}
+	}
+	return out
 }
 
 // serviceInput captures the editable fields of a Service. Managed timestamps
@@ -675,6 +732,38 @@ func (s *Server) discover(w http.ResponseWriter, r *http.Request) {
 	for _, i := range insts {
 		if i.Status == model.StatusUp {
 			out = append(out, i)
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// discoverByTag returns up-instances of every service that carries the given
+// tag. Required query string is ?tag=<value>. With no tag, returns 400.
+func (s *Server) discoverByTag(w http.ResponseWriter, r *http.Request) {
+	if !requireRead(w, r) {
+		return
+	}
+	tag := strings.TrimSpace(r.URL.Query().Get("tag"))
+	if tag == "" {
+		writeErr(w, http.StatusBadRequest, errors.New("tag query parameter required"))
+		return
+	}
+	svcs, err := s.store.ListServices()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	out := make([]model.Instance, 0)
+	for _, svc := range filterServicesByTag(svcs, tag) {
+		insts, err := s.store.ListInstances(svc.Name)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		for _, i := range insts {
+			if i.Status == model.StatusUp {
+				out = append(out, i)
+			}
 		}
 	}
 	writeJSON(w, http.StatusOK, out)

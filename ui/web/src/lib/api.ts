@@ -153,6 +153,11 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
   return res.json() as Promise<T>;
 }
 
+export interface TagCount {
+  tag: string;
+  count: number;
+}
+
 export const api = {
   // auth
   me: () => req<Me>("GET", "/v1/auth/me"),
@@ -161,13 +166,15 @@ export const api = {
   logout: () => req<void>("POST", "/v1/auth/logout"),
 
   // services
-  listServices: () => req<Service[]>("GET", "/v1/services"),
+  listServices: (tag?: string) =>
+    req<Service[]>("GET", `/v1/services${tag ? `?tag=${encodeURIComponent(tag)}` : ""}`),
   getService: (name: string) => req<Service>("GET", `/v1/services/${encodeURIComponent(name)}`),
   putService: (name: string, body: ServiceInput) =>
     req<Service>("PUT", `/v1/services/${encodeURIComponent(name)}`, body),
   deleteService: (name: string) => req<void>("DELETE", `/v1/services/${encodeURIComponent(name)}`),
   renameService: (oldName: string, newName: string) =>
     req<Service>("POST", `/v1/services/${encodeURIComponent(oldName)}/rename`, { newName }),
+  listTags: () => req<TagCount[]>("GET", "/v1/tags"),
 
   // grants
   addGrant: (service: string, userId: string) =>

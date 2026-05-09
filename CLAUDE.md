@@ -134,6 +134,16 @@ ACL semantics (matches the user spec):
 - All services are readable & discoverable regardless of visibility.
 - Grants management is stricter than edit: only owner or admin (see `canManageGrants`).
 
+### Tags
+
+`Service.Tags` is a free-form `[]string` for grouping/filtering. The endpoints:
+
+- `GET /v1/services?tag=foo` — list filtered by tag (exact match, AND-style across multiple `?tag=` would require a future change; currently only one is honoured).
+- `GET /v1/tags` — `[{tag, count}]` of every distinct tag in use, alphabetically sorted (handler `listTags` in `server.go`).
+- `GET /v1/discover?tag=foo` — every UP instance of every service carrying that tag (handler `discoverByTag`). Returns 400 if the query param is missing.
+
+Tags ride along with the rest of the Service blob (gossip + anti-entropy carry them for free). The Go client mirrors all three: `ListServicesByTag`, `ListTags`, `DiscoverByTag`. `Registration.Tags` opportunistically merges into the parent service on `Register` (best-effort — a failed merge does not abort the instance write).
+
 ### Audit
 
 Every mutation goes through `s.audit(r, action, target, targetType, details)`,

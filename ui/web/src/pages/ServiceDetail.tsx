@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams, Link } from "react-router-dom";
-import { ArrowLeft, Check, Copy, Plus, Settings, Trash2 } from "lucide-react";
+import { ArrowLeft, Check, Copy, Hash, Plus, Settings, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { api, CheckMode, CheckResponse, Instance, Interface, ProbeResult, Service, User, Visibility, watch } from "@/lib/api";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -87,7 +87,7 @@ export default function ServiceDetail() {
       await api.putService(service.name, {
         description: patch.description ?? service.description,
         visibility: patch.visibility ?? service.visibility,
-        tags: service.tags,
+        tags: patch.tags ?? service.tags,
         metadata: service.metadata,
       });
       toast.success("Service updated");
@@ -166,6 +166,17 @@ export default function ServiceDetail() {
               {!canEdit && <Badge variant="outline" size="sm">read-only for you</Badge>}
             </div>
             {service?.description && <div className="text-sm text-fg-muted mt-1">{service.description}</div>}
+            {service?.tags && service.tags.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {service.tags.map(t => (
+                  <Link key={t} to={`/?tag=${encodeURIComponent(t)}`}
+                    className="inline-flex items-center gap-1 h-6 px-2 rounded-full text-xs font-medium bg-surface border border-border text-fg-muted hover:text-fg hover:border-border-strong transition-colors">
+                    <Hash className="size-3" />
+                    {t}
+                  </Link>
+                ))}
+              </div>
+            )}
           </div>
           <div className="flex gap-2">
             {canEdit && (
@@ -398,6 +409,7 @@ function ServiceMetaEditor({
 }) {
   const [name, setName] = useState(service.name);
   const [description, setDescription] = useState(service.description || "");
+  const [tags, setTags] = useState((service.tags || []).join(", "));
   const [visibility, setVisibility] = useState<Visibility>(service.visibility || "public");
   const [grantInput, setGrantInput] = useState("");
 
@@ -407,7 +419,8 @@ function ServiceMetaEditor({
   }
 
   function handleSave() {
-    onSave({ description, visibility });
+    const tagList = tags.split(",").map(t => t.trim()).filter(Boolean);
+    onSave({ description, visibility, tags: tagList });
     if (name.trim() && name.trim() !== service.name) {
       onRename(name.trim());
     }
@@ -430,6 +443,12 @@ function ServiceMetaEditor({
           <div>
             <Label htmlFor="meta-desc">Description</Label>
             <Input id="meta-desc" value={description} onChange={e => setDescription(e.target.value)} />
+          </div>
+          <div>
+            <Label htmlFor="meta-tags">Tags</Label>
+            <Input id="meta-tags" value={tags} onChange={e => setTags(e.target.value)}
+              placeholder="comma-separated, e.g. backend, prod" />
+            <p className="text-xs text-fg-subtle mt-1">Used to group and filter services.</p>
           </div>
           <div>
             <Label>Visibility</Label>
