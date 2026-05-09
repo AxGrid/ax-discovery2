@@ -7,7 +7,7 @@ Go binary — no external database.
 The companion Go client library is its own repository:
 [github.com/axgrid/discovery2-client](https://github.com/axgrid/discovery2-client).
 
-![discovery services page](docs/screenshots/services.png)
+![discovery2](screenshots/1.png)
 
 ## Features
 
@@ -40,23 +40,6 @@ The companion Go client library is its own repository:
 - **Storage:** embedded BoltDB, single file. UI is embedded into the binary.
 - **REST API + WebSocket** for change events.
 - **Light / dark theme**, embedded SVG favicon, PWA manifest.
-
-## Screenshots
-
-| Services list | Service detail with health pills |
-|---|---|
-| ![](docs/screenshots/services.png) | ![](docs/screenshots/service-detail.png) |
-
-| Instance editor (liveness mode + per-interface health URL) | Audit log |
-|---|---|
-| ![](docs/screenshots/instance-editor.png) | ![](docs/screenshots/audit.png) |
-
-| Users (admin) | Cluster + runtime peer join |
-|---|---|
-| ![](docs/screenshots/users.png) | ![](docs/screenshots/cluster.png) |
-
-(See [`docs/screenshots/README.md`](docs/screenshots/README.md) for the
-expected file names if you want to refresh them.)
 
 ## Quick start
 
