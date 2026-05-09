@@ -1,0 +1,9 @@
+/bin/
+/discoveryd
+.env
+*.db
+ui/dist/assets/
+ui/dist/index.html
+ui/web/node_modules/
+ui/web/dist/
+.DS_Store
