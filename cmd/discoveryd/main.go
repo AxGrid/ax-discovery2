@@ -47,6 +47,15 @@ func main() {
 		logLevel     = flag.String("log", envOr("DISCOVERY_LOG", "info"), "log level: debug|info|warn|error")
 		defaultUser  = flag.String("default-admin-user", envOr("DISCOVERY_DEFAULT_ADMIN_USER", "admin"), "username for the bootstrap admin (only created if no users exist)")
 		defaultPass  = flag.String("default-admin-password", envOr("DISCOVERY_DEFAULT_ADMIN_PASSWORD", "admin"), "password for the bootstrap admin")
+
+		// ACME / Let's Encrypt
+		acmeEnable   = flag.Bool("acme", envBoolOr("DISCOVERY_ACME_ENABLE", false), "enable automatic HTTPS via Let's Encrypt (requires public DNS + ports 80/443)")
+		acmeDomains  = flag.String("acme-domains", envOr("DISCOVERY_ACME_DOMAINS", ""), "comma-separated allow-list of hostnames for which to issue certs")
+		acmeEmail    = flag.String("acme-email", envOr("DISCOVERY_ACME_EMAIL", ""), "contact email registered with Let's Encrypt (optional)")
+		acmeCache    = flag.String("acme-cache", envOr("DISCOVERY_ACME_CACHE", "./certs"), "directory for issued certificate cache (must persist across restarts)")
+		acmeStaging  = flag.Bool("acme-staging", envBoolOr("DISCOVERY_ACME_STAGING", false), "use the Let's Encrypt staging directory (untrusted certs, no rate limits)")
+		httpsListen  = flag.String("https-listen", envOr("DISCOVERY_HTTPS_LISTEN", ":443"), "HTTPS bind address when -acme is on")
+		httpListen80 = flag.String("acme-http-listen", envOr("DISCOVERY_ACME_HTTP_LISTEN", ":80"), "HTTP bind address for ACME http-01 challenges + redirect (when -acme is on)")
 	)
 	flag.Parse()
 
@@ -109,6 +118,15 @@ func main() {
 		Listen: *listen,
 		Logger: log,
 		UI:     uiFS,
+		TLS: server.TLSConfig{
+			Enable:             *acmeEnable,
+			Listen:             *httpsListen,
+			HTTPRedirectListen: *httpListen80,
+			Domains:            splitCSV(*acmeDomains),
+			Email:              *acmeEmail,
+			CacheDir:           *acmeCache,
+			Staging:            *acmeStaging,
+		},
 	}, st, authn, cl, hc)
 
 	var wg sync.WaitGroup

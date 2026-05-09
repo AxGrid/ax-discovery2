@@ -9,10 +9,13 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	"golang.org/x/crypto/acme"
+	"golang.org/x/crypto/acme/autocert"
 
 	"github.com/axgrid/discovery2/internal/auth"
 	"github.com/axgrid/discovery2/internal/cluster"
@@ -25,6 +28,33 @@ type Config struct {
 	Listen string
 	Logger *slog.Logger
 	UI     fs.FS
+
+	// TLS turns on automatic Let's Encrypt certificates via x/crypto/autocert.
+	// When Enable is true, Listen is ignored; the server runs on TLS.Listen
+	// (default :443) and a small HTTP listener on TLS.HTTPRedirectListen
+	// (default :80) handles ACME http-01 challenges plus a redirect to HTTPS.
+	TLS TLSConfig
+}
+
+// TLSConfig controls automatic HTTPS via Let's Encrypt.
+//
+// To use it, the host running discoveryd must:
+//   - bind privileged ports 80 and 443 (run as root, set CAP_NET_BIND_SERVICE,
+//     or use a port-forwarder),
+//   - have outbound HTTPS reachability to acme-v02.api.letsencrypt.org,
+//   - have inbound HTTP reachability on port 80 from Let's Encrypt's prober,
+//   - be the canonical DNS A/AAAA target for every domain in Domains.
+//
+// First request after a cold start may take a few seconds while the cert is
+// issued. Subsequent requests use the cached cert.
+type TLSConfig struct {
+	Enable             bool
+	Listen             string   // default ":443"
+	HTTPRedirectListen string   // default ":80"
+	Domains            []string // mandatory allow-list — autocert refuses any host not on it
+	Email              string   // optional contact for Let's Encrypt account recovery
+	CacheDir           string   // default "./certs" — must persist across restarts to avoid re-issuing
+	Staging            bool     // use the LE staging directory (no rate limits, untrusted certs)
 }
 
 type Server struct {
@@ -39,6 +69,7 @@ type Server struct {
 
 	srv *http.Server
 }
+
 
 func New(cfg Config, s *store.Store, a *auth.Authenticator, c *cluster.Cluster, hc *health.Checker) *Server {
 	if cfg.Logger == nil {
@@ -63,26 +94,121 @@ func (s *Server) Run(ctx context.Context) error {
 
 	mux := http.NewServeMux()
 	s.routes(mux)
+	handler := withCORS(withLogging(s.log, mux))
 
+	if s.cfg.TLS.Enable {
+		return s.runTLS(ctx, handler)
+	}
+	return s.runHTTP(ctx, handler)
+}
+
+func (s *Server) runHTTP(ctx context.Context, handler http.Handler) error {
 	s.srv = &http.Server{
 		Addr:              s.cfg.Listen,
-		Handler:           withCORS(withLogging(s.log, mux)),
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-
 	go func() {
 		<-ctx.Done()
 		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = s.srv.Shutdown(shutCtx)
 	}()
-
 	s.log.Info("api listening", "addr", s.cfg.Listen)
 	if err := s.srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	return nil
 }
+
+// runTLS serves HTTPS via autocert and runs a side HTTP listener on :80 for
+// ACME http-01 challenges plus a permanent redirect to HTTPS.
+func (s *Server) runTLS(ctx context.Context, handler http.Handler) error {
+	cfg := s.cfg.TLS
+	if len(cfg.Domains) == 0 {
+		return errors.New("TLS.Enable=true but TLS.Domains is empty — autocert refuses to run without a HostPolicy allow-list")
+	}
+	listen := cfg.Listen
+	if listen == "" {
+		listen = ":443"
+	}
+	httpListen := cfg.HTTPRedirectListen
+	if httpListen == "" {
+		httpListen = ":80"
+	}
+	cache := cfg.CacheDir
+	if cache == "" {
+		cache = "./certs"
+	}
+
+	m := &autocert.Manager{
+		Cache:      autocert.DirCache(cache),
+		Prompt:     autocert.AcceptTOS,
+		HostPolicy: autocert.HostWhitelist(cfg.Domains...),
+		Email:      cfg.Email,
+	}
+	if cfg.Staging {
+		// Let's Encrypt staging — no rate limits, but certs are not trusted by browsers.
+		// Useful for testing the wiring without burning real-cert quota.
+		m.Client = &acme.Client{DirectoryURL: "https://acme-staging-v02.api.letsencrypt.org/directory"}
+	}
+
+	httpsSrv := &http.Server{
+		Addr:              listen,
+		Handler:           handler,
+		TLSConfig:         m.TLSConfig(),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	httpSrv := &http.Server{
+		Addr:              httpListen,
+		Handler:           m.HTTPHandler(http.HandlerFunc(redirectToHTTPS)),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	s.srv = httpsSrv
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	errCh := make(chan error, 2)
+
+	go func() {
+		defer wg.Done()
+		s.log.Info("acme http listening", "addr", httpListen)
+		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errCh <- fmt.Errorf("acme http: %w", err)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		s.log.Info("api listening (https)", "addr", listen, "domains", cfg.Domains)
+		// Empty cert/key paths → autocert provides them via TLSConfig.GetCertificate.
+		if err := httpsSrv.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errCh <- fmt.Errorf("api https: %w", err)
+		}
+	}()
+
+	go func() {
+		<-ctx.Done()
+		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = httpSrv.Shutdown(shutCtx)
+		_ = httpsSrv.Shutdown(shutCtx)
+	}()
+
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func redirectToHTTPS(w http.ResponseWriter, r *http.Request) {
+	target := "https://" + r.Host + r.URL.RequestURI()
+	http.Redirect(w, r, target, http.StatusMovedPermanently)
+}
+
 
 func (s *Server) routes(mux *http.ServeMux) {
 	api := http.NewServeMux()

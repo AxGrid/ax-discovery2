@@ -1,4 +1,10 @@
-.PHONY: all ui ui-deps run run-cluster build go-build test clean
+.PHONY: all ui ui-deps run run-cluster build go-build \
+        build-linux build-linux-amd64 build-linux-arm64 build-all \
+        test clean
+
+# Strip symbols + DWARF for cross-built Linux binaries. ~30% smaller, no
+# debugger experience on the binary, but we keep symbols on the native build.
+LINUX_LDFLAGS := -ldflags=-s -w
 
 all: build
 
@@ -34,6 +40,27 @@ go-build:
 # Default build: UI then binary, producing a self-contained ./discoveryd
 # with the latest UI embedded.
 build: ui go-build
+
+# --- Linux cross-compile -----------------------------------------------------
+# All deps are pure Go, so CGO_ENABLED=0 gives us static binaries that run on
+# any glibc/musl without compatibility headaches. Output lands next to the
+# native build but with a -linux-<arch> suffix.
+
+build-linux-amd64: ui
+	mkdir -p bin
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+	    go build "$(LINUX_LDFLAGS)" -o bin/discoveryd-linux-amd64 ./cmd/discoveryd
+
+build-linux-arm64: ui
+	mkdir -p bin
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
+	    go build "$(LINUX_LDFLAGS)" -o bin/discoveryd-linux-arm64 ./cmd/discoveryd
+
+# Build both common Linux archs at once.
+build-linux: build-linux-amd64 build-linux-arm64
+
+# Native + both Linux archs. Useful before cutting a release.
+build-all: build build-linux
 
 # Build everything and run on :8500. Open http://localhost:8500.
 run: build

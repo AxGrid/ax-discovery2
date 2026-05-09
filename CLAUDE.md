@@ -15,8 +15,8 @@ The companion Go client library is its own repo at
 ## Stack snapshot
 
 - **Backend:** Go 1.23 (toolchain 1.23.4), `go.etcd.io/bbolt`, `hashicorp/memberlist`,
-  `gorilla/websocket`, `golang.org/x/crypto/bcrypt`, `joho/godotenv`,
-  `google/uuid`. Standard `net/http` (no chi/gin) — Go 1.22+ pattern matching.
+  `gorilla/websocket`, `golang.org/x/crypto/bcrypt`, `golang.org/x/crypto/acme/autocert`,
+  `joho/godotenv`, `google/uuid`. Standard `net/http` (no chi/gin) — Go 1.22+ pattern matching.
 - **Per-instance health modes:** `heartbeat` (default), `http`, `tcp`, `none`.
   Stored on `Instance.CheckMode` + `Instance.CheckIntervalSec`. Single
   ticker dispatches per mode (see `internal/health/health.go`). HTTP/TCP
@@ -182,6 +182,29 @@ Updates reach the UI via the next status flip event or a page refresh.
 There is **no** global "active probes" flag anymore — probing is per-instance,
 configured at registration. If you need a server-wide default, add it as a
 field on the daemon config and stamp new instances with it.
+
+### Automatic HTTPS (autocert)
+
+`server.Run` branches on `Config.TLS.Enable`. When on, `runTLS` starts two
+listeners:
+
+- **:443 (HTTPS)** with `m.TLSConfig()` from `autocert.Manager`. Certificates
+  are fetched on demand and cached in `TLS.CacheDir` (default `./certs`).
+- **:80 (HTTP)** running `m.HTTPHandler(http.HandlerFunc(redirectToHTTPS))` —
+  serves the ACME `http-01` challenge and redirects everything else to HTTPS.
+
+`autocert.HostPolicy` is **mandatory** (`HostWhitelist(Domains...)`); without
+a domain allow-list autocert refuses to start, which is the behaviour we
+want — otherwise the server can be abused as an ACME proxy.
+
+Staging mode (`TLS.Staging`) swaps in Let's Encrypt's staging ACME directory
+via `acme.Client{DirectoryURL: ...}`; certs are untrusted but issuance is
+unconstrained, useful for dry-running deploys.
+
+The cluster's gossip / anti-entropy code is unaware of TLS — peers still talk
+HTTP between each other on the cluster port. If you need cross-node TLS for
+gossip itself, that's a much bigger lift (memberlist's encryption is symmetric
+key, not TLS).
 
 ### On-demand health check
 

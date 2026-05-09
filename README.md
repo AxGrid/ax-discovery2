@@ -53,6 +53,19 @@ Open <http://localhost:8500> and sign in with the credentials from `.env`.
 On first launch, if no users exist, an admin is auto-created from
 `DISCOVERY_DEFAULT_ADMIN_USER` / `DISCOVERY_DEFAULT_ADMIN_PASSWORD`.
 
+### Cross-compile for Linux
+
+```bash
+make build-linux             # both amd64 + arm64
+make build-linux-amd64       # just amd64
+make build-linux-arm64       # just arm64
+make build-all               # native + both Linux archs
+```
+
+Output: `bin/discoveryd-linux-amd64` and `bin/discoveryd-linux-arm64`.
+Statically linked (`CGO_ENABLED=0`), stripped (`-s -w`); ~8 MB each. Runs
+on any glibc / musl distribution without further dependencies.
+
 ### Two-node cluster (one machine)
 
 ```bash
@@ -79,9 +92,51 @@ All flags also accept env vars (`DISCOVERY_*`). See `.env.example`.
 | `-allow-anonymous-read` | `DISCOVERY_ALLOW_ANON_READ` | `true` | |
 | `-default-admin-user` | `DISCOVERY_DEFAULT_ADMIN_USER` | `admin` | Bootstrap admin username (only created if no users exist) |
 | `-default-admin-password` | `DISCOVERY_DEFAULT_ADMIN_PASSWORD` | `admin` | Bootstrap admin password |
+| `-acme` | `DISCOVERY_ACME_ENABLE` | `false` | Enable automatic HTTPS via Let's Encrypt |
+| `-acme-domains` | `DISCOVERY_ACME_DOMAINS` | (none) | Comma-separated hostnames the server is allowed to issue certs for |
+| `-acme-email` | `DISCOVERY_ACME_EMAIL` | (none) | Optional contact email registered with Let's Encrypt |
+| `-acme-cache` | `DISCOVERY_ACME_CACHE` | `./certs` | Cert cache directory; must persist across restarts |
+| `-acme-staging` | `DISCOVERY_ACME_STAGING` | `false` | Use the staging directory (untrusted certs, no rate limits) |
+| `-https-listen` | `DISCOVERY_HTTPS_LISTEN` | `:443` | HTTPS bind when ACME is on |
+| `-acme-http-listen` | `DISCOVERY_ACME_HTTP_LISTEN` | `:80` | HTTP bind for ACME challenges + redirect |
 
 Liveness checks are configured **per instance** (`CheckMode` field), not via
 a server-wide flag.
+
+### Automatic HTTPS via Let's Encrypt
+
+`discoveryd` ships with [autocert](https://pkg.go.dev/golang.org/x/crypto/acme/autocert)
+support — flip `DISCOVERY_ACME_ENABLE=true`, list your domains, and it will
+fetch and renew certificates from Let's Encrypt automatically. Plain HTTP on
+:80 keeps running for the ACME `http-01` challenge and to redirect everything
+else to HTTPS.
+
+Minimal `.env`:
+
+```
+DISCOVERY_ACME_ENABLE=true
+DISCOVERY_ACME_DOMAINS=discovery.example.com
+DISCOVERY_ACME_EMAIL=ops@example.com
+DISCOVERY_ACME_CACHE=/var/lib/discovery/certs
+```
+
+What you need to set up yourself:
+
+- Public DNS `A` / `AAAA` records for every host in `DISCOVERY_ACME_DOMAINS`
+  pointing at this server.
+- Ports **80 and 443 reachable from the public internet**. Run as root,
+  set `CAP_NET_BIND_SERVICE`, or port-forward via a load balancer / iptables.
+- A persistent `DISCOVERY_ACME_CACHE` directory. Don't put it in `/tmp`;
+  Let's Encrypt rate-limits cert issuance and you'll lock yourself out
+  if certs disappear on every restart.
+- Outbound HTTPS reachability to `acme-v02.api.letsencrypt.org`.
+
+Test the wiring without burning quota: `DISCOVERY_ACME_STAGING=true` switches
+to LE's staging directory. Browsers will refuse the cert, but you can
+confirm the issuance flow works. Flip back to `false` for real certs.
+
+The first request after a cold start may take several seconds while the
+cert is issued; subsequent requests use the cache.
 
 ## REST API
 

@@ -1,6 +1,7 @@
 /bin/
 /discoveryd
 .env
+/certs/
 *.db
 ui/dist/assets/
 ui/dist/index.html
