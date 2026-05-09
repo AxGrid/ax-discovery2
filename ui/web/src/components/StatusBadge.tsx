@@ -1,16 +1,17 @@
 import type { Status } from "@/lib/api";
+import { Badge } from "@/components/ui";
 
 export function StatusBadge({ status }: { status: Status }) {
   switch (status) {
     case "up":
-      return <span className="badge-success">● up</span>;
+      return <Badge variant="success" dot>up</Badge>;
     case "down":
-      return <span className="badge-danger">● down</span>;
+      return <Badge variant="danger" dot>down</Badge>;
     case "starting":
-      return <span className="badge-warn">● starting</span>;
+      return <Badge variant="warning" dot>starting</Badge>;
     case "draining":
-      return <span className="badge-warn">● draining</span>;
+      return <Badge variant="warning" dot>draining</Badge>;
     default:
-      return <span className="badge">unknown</span>;
+      return <Badge variant="neutral">unknown</Badge>;
   }
 }

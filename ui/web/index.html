@@ -1,8 +1,19 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="light">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+
+    <!-- Apply the persisted theme before first paint to avoid FOUC. -->
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem('ax-styler-theme');
+          if (!t) t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+          document.documentElement.setAttribute('data-theme', t);
+        } catch (e) {}
+      })();
+    </script>
 
     <title>discovery</title>
     <meta name="description" content="Service discovery — registry, load balancing, health checks, and an audit trail." />
@@ -13,8 +24,8 @@
     <link rel="manifest" href="/site.webmanifest" />
 
     <!-- Theme — switches with the user's light/dark preference, matches our brand. -->
-    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#eef2ff" />
-    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#09090b" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#FFFFFF" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0A0A0A" />
     <meta name="color-scheme" content="light dark" />
 
     <!-- Mobile / iOS niceties -->
@@ -31,7 +42,7 @@
     <meta name="twitter:title" content="discovery" />
     <meta name="twitter:description" content="Service discovery — registry, load balancing, health checks, and an audit trail." />
   </head>
-  <body class="bg-zinc-50 dark:bg-zinc-950">
+  <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

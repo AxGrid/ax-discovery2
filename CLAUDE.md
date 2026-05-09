@@ -22,9 +22,13 @@ The companion Go client library is its own repo at
   ticker dispatches per mode (see `internal/health/health.go`). HTTP/TCP
   modes probe **all** matching interfaces (AND-semantics) and persist a
   per-interface report in `Instance.LastCheck`.
-- **Frontend:** React 18 + Vite + TypeScript + Tailwind 3, react-router-dom v6.
-  No state library; React context for `auth` and `theme`. Cookie-session auth
-  via `credentials: "include"` on every fetch.
+- **Frontend:** React 18 + Vite + TypeScript + **Tailwind v4** with the
+  `@tailwindcss/vite` plugin. The **Ax Styler** design system is vendored
+  under `src/components/ui/` (sources from `~/.claude/skills/ax-styler/source/`):
+  Radix UI primitives, brand orange `#FF6B1A`, soft radii (10/14px), glass
+  modals, sonner toasts. Theme via `data-theme="light|dark"` on `<html>`,
+  applied inline before paint to avoid FOUC. Cookie-session auth via
+  `credentials: "include"` on every fetch.
 - **Storage:** single bbolt file. Buckets: `services`, `instances`, `users`,
   `users_by_name`, `sessions`, `audit`. No external DB.
 - **Cluster:** memberlist gossip + HTTP `/cluster/snapshot` for anti-entropy;
@@ -63,15 +67,21 @@ ui/
 ├── embed.go                       # //go:embed all:dist
 ├── dist/                          # built React assets (gitignored beyond placeholder)
 └── web/
-    ├── package.json, vite.config.ts, tailwind.config.js
+    ├── package.json, vite.config.ts (Tailwind plugin), tsconfig.json, public/
     └── src/
-        ├── main.tsx               # ThemeProvider + AuthProvider wrap App
+        ├── main.tsx               # ThemeProvider + I18nProvider + TooltipProvider + AuthProvider + Toaster
         ├── App.tsx                # routes; RequireAuth + RequireAdmin guards
+        ├── index.css              # @import "tailwindcss" + tw-animate-css + ax-styler tokens
+        ├── _ax-styler.css         # vendored tokens.css + tokens-theme.css + preflight.css
         ├── lib/
         │   ├── api.ts             # fetch wrapper (credentials: include); types; watch() WS reconnect
-        │   ├── auth.tsx           # AuthProvider, useAuth(); login/logout/refresh
-        │   └── theme.tsx          # light/dark toggle; class="dark" + data-theme
-        ├── components/            # AppShell (sidebar w/ admin links), ThemeToggle, Logo, StatusBadge
+        │   └── auth.tsx           # AuthProvider, useAuth(); login/logout/refresh
+        ├── components/
+        │   ├── ui/                # vendored ax-styler — Button, Input, Card, Dialog, Select, Switch,
+        │   │                      # Checkbox, Tabs, Tooltip, Avatar, ThemeToggle, theme.tsx, i18n.tsx, ...
+        │   ├── AppShell.tsx       # sidebar w/ admin links + ThemeToggle from ui/
+        │   ├── Logo.tsx           # project-specific brand logo (orange gradient)
+        │   └── StatusBadge.tsx    # thin wrapper over ax-styler Badge for instance up/down
         └── pages/                 # Login, Services, ServiceDetail (incl. visibility+grants editor),
                                    # Cluster, Users, Audit, About
 
@@ -329,7 +339,7 @@ These have bitten us; future code touching adjacent areas should be careful.
 1. Create `ui/web/src/pages/Foo.tsx`.
 2. Add a route in `App.tsx` inside the `<RequireAuth>` (or `<RequireAdmin>` for admin-only) group.
 3. Add a nav link in `components/AppShell.tsx`. Admin-only links go inside the `me?.isAdmin && (...)` block.
-4. Use the existing component classes: `card`, `btn-primary` / `btn-secondary` / `btn-ghost` / `btn-danger`, `input`, `label`, `badge`, `badge-brand`, `badge-success`, `badge-warn`, `badge-danger`, `kbd`. Don't introduce new ones for one-off pages — the visual language is shared with cashier-ui.
+4. Use ax-styler primitives from `@/components/ui` — `Card` / `CardContent`, `Button` (variants: `primary` / `secondary` / `ghost` / `outline` / `danger` / `link`), `Input`, `Label`, `Select` + `SelectTrigger` / `SelectContent` / `SelectItem`, `Dialog` + `DialogContent` / `DialogHeader` / `DialogTitle` / `DialogFooter`, `Badge` (variants: `brand` / `success` / `warning` / `danger` / `info` / `neutral` / `outline`), `Switch`, `Checkbox`. For confirmations use a `Dialog` with two buttons (don't `confirm()`); for transient messages, `toast.success()` / `toast.error()` from `sonner`. Don't reach for raw Tailwind colour utilities — use the ax-styler tokens (`bg-bg`, `text-fg`, `text-fg-muted`, `border-border`, `bg-surface`, etc.).
 
 ### Add a new env var
 
@@ -352,6 +362,33 @@ should:
    in the local audit log of the node that received the request.
 
 ---
+
+## UI invariants (ax-styler hard rules)
+
+These are baked-in. Drop them and the design system breaks.
+
+1. **Theme** is `data-theme="light"|"dark"` on `<html>`, persisted to
+   `localStorage['ax-styler-theme']`, applied inline before paint
+   (`<script>` in `index.html`). **Never** rely on `prefers-color-scheme`
+   alone or use `class="dark"` (Tailwind v4 doesn't honour our setup).
+2. **Inputs** carry their border on the **outer wrapper**; the inner native
+   `<input>` is `border-0 bg-transparent`. Don't add a second border to the
+   inner element — you'll get double-borders in dark mode.
+3. **No global** `:focus-visible { box-shadow: ring }`. Each component draws
+   its own focus ring on its outer wrapper. Adding a global ring causes
+   double-rings on inputs / selects / etc.
+4. **Radius** always via `var(--radius-*)` (or the corresponding utility
+   `rounded-[var(--radius-md)]`). Never hardcoded `rounded-md`
+   (Tailwind default is 6px; ours is 10px) or raw rems.
+5. **Toasts**: `<Toaster />` is mounted once in `main.tsx`; toasts go
+   top-right. Don't add per-page toasters.
+6. **Modals**: use `Dialog` from `@/components/ui` — never inline
+   `<div className="fixed inset-0...">`. `Dialog` ships with the glass
+   backdrop + focus trap + Escape handling.
+7. **`react-day-picker`**: never `import 'react-day-picker/style.css'` — it
+   ships unlayered rules that win over Tailwind utilities and break
+   dark-mode range styling. The vendored `Calendar` component handles all
+   styling.
 
 ## Code style
 

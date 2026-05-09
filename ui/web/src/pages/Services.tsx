@@ -1,12 +1,18 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import { Plus } from "lucide-react";
 import { api, Service, watch } from "@/lib/api";
+import {
+  Badge, Button, Card, CardContent,
+  Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
+  Input, Label, Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui";
+import { toast } from "sonner";
 
 export default function Services() {
   const [services, setServices] = useState<Service[]>([]);
   const [counts, setCounts] = useState<Record<string, { up: number; total: number }>>({});
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
   const [newDesc, setNewDesc] = useState("");
@@ -26,9 +32,8 @@ export default function Services() {
         }
       }));
       setCounts(c);
-      setError(null);
     } catch (e: any) {
-      setError(e.message);
+      toast.error(e.message);
     } finally {
       setLoading(false);
     }
@@ -47,10 +52,11 @@ export default function Services() {
         description: newDesc.trim() || undefined,
         visibility: newVisibility,
       });
+      toast.success(`Service "${newName.trim()}" created`);
       setNewName(""); setNewDesc(""); setNewVisibility("public"); setCreating(false);
       refresh();
     } catch (e: any) {
-      setError(e.message);
+      toast.error(e.message);
     }
   }
 
@@ -59,71 +65,80 @@ export default function Services() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Services</h1>
-          <p className="text-sm text-zinc-500 mt-1">{services.length} registered</p>
+          <p className="text-sm text-fg-muted mt-1">{services.length} registered</p>
         </div>
-        <button className="btn-primary" onClick={() => setCreating(v => !v)}>+ New service</button>
+        <Button leftIcon={<Plus className="size-4" />} onClick={() => setCreating(true)}>
+          New service
+        </Button>
       </div>
 
-      {error && (
-        <div className="card mb-4 border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950 text-red-700 dark:text-red-300 text-sm">
-          {error}
-        </div>
-      )}
-
-      {creating && (
-        <div className="card mb-4">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+      <Dialog open={creating} onOpenChange={setCreating}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>New service</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
             <div>
-              <label className="label">Name</label>
-              <input className="input" value={newName} onChange={e => setNewName(e.target.value)} placeholder="e.g. billing" autoFocus />
+              <Label htmlFor="svc-name">Name</Label>
+              <Input id="svc-name" value={newName}
+                onChange={e => setNewName(e.target.value)} placeholder="e.g. billing" autoFocus />
             </div>
             <div>
-              <label className="label">Description</label>
-              <input className="input" value={newDesc} onChange={e => setNewDesc(e.target.value)} placeholder="optional" />
+              <Label htmlFor="svc-desc">Description</Label>
+              <Input id="svc-desc" value={newDesc}
+                onChange={e => setNewDesc(e.target.value)} placeholder="optional" />
             </div>
             <div>
-              <label className="label">Visibility</label>
-              <select className="input" value={newVisibility}
-                onChange={e => setNewVisibility(e.target.value as "public" | "private")}>
-                <option value="public">public — anyone can edit</option>
-                <option value="private">private — only owner / admin / granted</option>
-              </select>
+              <Label>Visibility</Label>
+              <Select value={newVisibility} onValueChange={v => setNewVisibility(v as "public" | "private")}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="public">public — anyone can edit</SelectItem>
+                  <SelectItem value="private">private — only owner / admin / granted</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
           </div>
-          <div className="mt-4 flex gap-2 justify-end">
-            <button className="btn-ghost" onClick={() => setCreating(false)}>Cancel</button>
-            <button className="btn-primary" onClick={create}>Create</button>
-          </div>
-        </div>
-      )}
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setCreating(false)}>Cancel</Button>
+            <Button onClick={create}>Create</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {loading ? (
-        <div className="text-zinc-500">Loading…</div>
+        <div className="text-fg-muted">Loading…</div>
       ) : services.length === 0 ? (
-        <div className="card text-center text-zinc-500">
-          No services yet. Click <strong>+ New service</strong> to add one,
-          or register one via the API / client library.
-        </div>
+        <Card>
+          <CardContent className="text-center text-fg-muted py-12">
+            No services yet. Click <strong>New service</strong> to add one,
+            or register one via the API / client library.
+          </CardContent>
+        </Card>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {services.map(s => (
             <Link to={`/services/${encodeURIComponent(s.name)}`} key={s.name}
-                  className="card hover:shadow-glow hover:border-brand-300 dark:hover:border-brand-500/50 transition">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-semibold truncate">{s.name}</span>
-                    <VisibilityBadge v={s.visibility} />
+                  className="group rounded-[var(--radius-lg)]">
+              <Card className="hover:border-accent/50 transition-colors h-full">
+                <CardContent className="pt-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-semibold truncate">{s.name}</span>
+                        <VisibilityBadge v={s.visibility} />
+                      </div>
+                      {s.description && <div className="text-sm text-fg-muted truncate mt-1">{s.description}</div>}
+                    </div>
+                    <CountBadge c={counts[s.name]} />
                   </div>
-                  {s.description && <div className="text-sm text-zinc-500 truncate mt-1">{s.description}</div>}
-                </div>
-                <CountBadge c={counts[s.name]} />
-              </div>
-              {s.tags && s.tags.length > 0 && (
-                <div className="mt-3 flex flex-wrap gap-1">
-                  {s.tags.map(t => <span key={t} className="badge">{t}</span>)}
-                </div>
-              )}
+                  {s.tags && s.tags.length > 0 && (
+                    <div className="mt-3 flex flex-wrap gap-1">
+                      {s.tags.map(t => <Badge key={t} variant="neutral" size="sm">{t}</Badge>)}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
             </Link>
           ))}
         </div>
@@ -133,14 +148,14 @@ export default function Services() {
 }
 
 export function VisibilityBadge({ v }: { v?: string }) {
-  if (v === "private") return <span className="badge-warn">private</span>;
-  return <span className="badge">public</span>;
+  if (v === "private") return <Badge variant="warning" size="sm">private</Badge>;
+  return <Badge variant="neutral" size="sm">public</Badge>;
 }
 
 function CountBadge({ c }: { c?: { up: number; total: number } }) {
-  if (!c) return <span className="badge">—</span>;
-  if (c.total === 0) return <span className="badge">no instances</span>;
-  if (c.up === c.total) return <span className="badge-success">{c.up}/{c.total} up</span>;
-  if (c.up === 0) return <span className="badge-danger">0/{c.total} up</span>;
-  return <span className="badge-warn">{c.up}/{c.total} up</span>;
+  if (!c) return <Badge variant="neutral" size="sm">—</Badge>;
+  if (c.total === 0) return <Badge variant="neutral" size="sm">no instances</Badge>;
+  if (c.up === c.total) return <Badge variant="success" size="sm" dot>{c.up}/{c.total} up</Badge>;
+  if (c.up === 0) return <Badge variant="danger" size="sm" dot>0/{c.total} up</Badge>;
+  return <Badge variant="warning" size="sm" dot>{c.up}/{c.total} up</Badge>;
 }

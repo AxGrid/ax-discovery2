@@ -1,0 +1,220 @@
+/* Styler design tokens — drop into any project, no Tailwind required.
+ * Toggle theme by setting `data-theme="light"` | `data-theme="dark"` on <html>. */
+
+:root,
+[data-theme="light"] {
+  --brand-50:  #FFF4EB; --brand-100: #FFE4D0; --brand-200: #FFC59E;
+  --brand-300: #FFA66C; --brand-400: #FF8A40; --brand-500: #FF6B1A;
+  --brand-600: #E85610; --brand-700: #B8430C; --brand-800: #8A3208; --brand-900: #5C2105;
+
+  --bg: #FFFFFF; --bg-elevated: #FFFFFF;
+  --surface: #F7F7F7; --surface-2: #F0F0F0; --surface-hover: #ECECEC;
+
+  --fg: #1A1A1A; --fg-muted: #6B6B6B; --fg-subtle: #999999; --fg-on-brand: #FFFFFF;
+
+  --border: #E5E5E5; --border-strong: #D0D0D0;
+  --ring: color-mix(in oklab, var(--brand-500) 60%, transparent);
+
+  --accent: var(--brand-500); --accent-hover: var(--brand-600); --accent-active: var(--brand-700);
+  --accent-fg: #FFFFFF;
+
+  --success: #16A34A; --success-fg: #FFFFFF; --success-bg: #F0FDF4;
+  --warning: #D97706; --warning-fg: #FFFFFF; --warning-bg: #FEF3C7;
+  --danger:  #DC2626; --danger-fg:  #FFFFFF; --danger-bg:  #FEF2F2;
+  --info:    #2563EB; --info-fg:    #FFFFFF; --info-bg:    #EFF6FF;
+
+  --overlay: color-mix(in oklab, #000 35%, transparent);
+  --glass-bg: color-mix(in oklab, #FFFFFF 70%, transparent);
+  --glass-border: color-mix(in oklab, #000 8%, transparent);
+
+  --shadow-xs: 0 1px 2px 0 color-mix(in oklab, #000 5%, transparent);
+  --shadow-sm: 0 1px 3px 0 color-mix(in oklab, #000 8%, transparent),
+               0 1px 2px -1px color-mix(in oklab, #000 6%, transparent);
+  --shadow-md: 0 4px 12px -2px color-mix(in oklab, #000 10%, transparent),
+               0 2px 4px -2px color-mix(in oklab, #000 6%, transparent);
+  --shadow-lg: 0 12px 32px -8px color-mix(in oklab, #000 15%, transparent),
+               0 4px 12px -4px color-mix(in oklab, #000 8%, transparent);
+  --shadow-xl: 0 24px 48px -12px color-mix(in oklab, #000 22%, transparent),
+               0 8px 24px -8px color-mix(in oklab, #000 10%, transparent);
+  --shadow-glow: 0 0 0 4px color-mix(in oklab, var(--brand-500) 18%, transparent);
+
+  --radius-xs: 4px; --radius-sm: 6px; --radius-md: 10px; --radius-lg: 14px;
+  --radius-xl: 20px; --radius-2xl: 28px; --radius-full: 9999px;
+
+  --font-sans: 'Inter', 'SF Pro Display', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', ui-monospace, monospace;
+}
+
+[data-theme="dark"] {
+  --brand-50:  #2A1505; --brand-100: #3D1F08; --brand-200: #5C2E0C;
+  --brand-300: #8A4513; --brand-400: #C26020; --brand-500: #FF7A2E;
+  --brand-600: #FF8F4D; --brand-700: #FFA66C; --brand-800: #FFC093; --brand-900: #FFE0CB;
+
+  --bg: #0A0A0A; --bg-elevated: #111111;
+  --surface: #161616; --surface-2: #1F1F1F; --surface-hover: #242424;
+
+  --fg: #FAFAFA; --fg-muted: #A1A1A1; --fg-subtle: #666666; --fg-on-brand: #0A0A0A;
+
+  --border: #262626; --border-strong: #383838;
+  --ring: color-mix(in oklab, var(--brand-500) 65%, transparent);
+
+  --accent: var(--brand-500); --accent-hover: var(--brand-600); --accent-active: var(--brand-700);
+  --accent-fg: #0A0A0A;
+
+  --success: #22C55E; --success-fg: #0A0A0A; --success-bg: color-mix(in oklab, #22C55E 12%, transparent);
+  --warning: #F59E0B; --warning-fg: #0A0A0A; --warning-bg: color-mix(in oklab, #F59E0B 14%, transparent);
+  --danger:  #EF4444; --danger-fg:  #FFFFFF; --danger-bg:  color-mix(in oklab, #EF4444 14%, transparent);
+  --info:    #3B82F6; --info-fg:    #FFFFFF; --info-bg:    color-mix(in oklab, #3B82F6 14%, transparent);
+
+  --overlay: color-mix(in oklab, #000 60%, transparent);
+  --glass-bg: color-mix(in oklab, #FFFFFF 6%, transparent);
+  --glass-border: color-mix(in oklab, #FFFFFF 10%, transparent);
+
+  --shadow-xs: 0 1px 2px 0 rgba(0,0,0,0.4);
+  --shadow-sm: 0 1px 3px 0 rgba(0,0,0,0.5), 0 1px 2px -1px rgba(0,0,0,0.4);
+  --shadow-md: 0 4px 12px -2px rgba(0,0,0,0.6), 0 2px 4px -2px rgba(0,0,0,0.4);
+  --shadow-lg: 0 12px 32px -8px rgba(0,0,0,0.7), 0 4px 12px -4px rgba(0,0,0,0.5);
+  --shadow-xl: 0 24px 48px -12px rgba(0,0,0,0.8), 0 8px 24px -8px rgba(0,0,0,0.5);
+  --shadow-glow: 0 0 0 4px color-mix(in oklab, var(--brand-500) 28%, transparent);
+}
+/* Tailwind v4 @theme inline block — drop into your global CSS after `@import "tailwindcss"`
+ * and after the :root/[data-theme="dark"] CSS variable blocks (from tokens.css).
+ *
+ * This maps the Ax Styler design tokens to Tailwind utility names so you can write
+ *   <div class="bg-bg text-fg-muted rounded-[var(--radius-md)]">
+ * and friends. */
+
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+@theme inline {
+  --font-sans: 'Inter', 'SF Pro Display', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-display: 'Inter', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', ui-monospace, monospace;
+
+  --color-bg:            var(--bg);
+  --color-bg-elevated:   var(--bg-elevated);
+  --color-surface:       var(--surface);
+  --color-surface-2:     var(--surface-2);
+  --color-surface-hover: var(--surface-hover);
+  --color-fg:            var(--fg);
+  --color-fg-muted:      var(--fg-muted);
+  --color-fg-subtle:     var(--fg-subtle);
+  --color-fg-on-brand:   var(--fg-on-brand);
+  --color-border:        var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-ring:          var(--ring);
+
+  --color-brand-50:  var(--brand-50);
+  --color-brand-100: var(--brand-100);
+  --color-brand-200: var(--brand-200);
+  --color-brand-300: var(--brand-300);
+  --color-brand-400: var(--brand-400);
+  --color-brand-500: var(--brand-500);
+  --color-brand-600: var(--brand-600);
+  --color-brand-700: var(--brand-700);
+  --color-brand-800: var(--brand-800);
+  --color-brand-900: var(--brand-900);
+
+  --color-accent:        var(--accent);
+  --color-accent-hover:  var(--accent-hover);
+  --color-accent-active: var(--accent-active);
+  --color-accent-fg:     var(--accent-fg);
+
+  --color-success:       var(--success);
+  --color-success-fg:    var(--success-fg);
+  --color-success-bg:    var(--success-bg);
+  --color-warning:       var(--warning);
+  --color-warning-fg:    var(--warning-fg);
+  --color-warning-bg:    var(--warning-bg);
+  --color-danger:        var(--danger);
+  --color-danger-fg:     var(--danger-fg);
+  --color-danger-bg:     var(--danger-bg);
+  --color-info:          var(--info);
+  --color-info-fg:       var(--info-fg);
+  --color-info-bg:       var(--info-bg);
+
+  --color-overlay:       var(--overlay);
+  --color-glass-bg:      var(--glass-bg);
+  --color-glass-border:  var(--glass-border);
+
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+  --radius-2xl: 28px;
+  --radius-full: 9999px;
+
+  --shadow-xs: var(--shadow-xs);
+  --shadow-sm: var(--shadow-sm);
+  --shadow-md: var(--shadow-md);
+  --shadow-lg: var(--shadow-lg);
+  --shadow-xl: var(--shadow-xl);
+  --shadow-glow: var(--shadow-glow);
+
+  --animate-fade-in: fadeIn 200ms ease-out;
+  --animate-slide-up: slideUp 250ms cubic-bezier(0.22, 1, 0.36, 1);
+  --animate-scale-in: scaleIn 180ms cubic-bezier(0.22, 1, 0.36, 1);
+  --animate-shimmer: shimmer 2.4s linear infinite;
+}
+
+@keyframes shimmer { 0% { background-position: -200% 0 } 100% { background-position: 200% 0 } }
+@keyframes fadeIn  { from { opacity: 0 } to { opacity: 1 } }
+@keyframes slideUp { from { opacity: 0; transform: translateY(8px) } to { opacity: 1; transform: translateY(0) } }
+@keyframes scaleIn { from { opacity: 0; transform: scale(0.96) } to { opacity: 1; transform: scale(1) } }
+
+@utility glass {
+  background: var(--glass-bg);
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  border: 1px solid var(--glass-border);
+}
+
+@utility glass-strong {
+  background: color-mix(in oklab, var(--bg) 70%, transparent);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid var(--glass-border);
+}
+
+@utility text-balance { text-wrap: balance; }
+
+@utility brand-gradient {
+  background: linear-gradient(135deg, var(--brand-400) 0%, var(--brand-600) 100%);
+}
+/* Styler preflight — base resets that the components depend on. Pair with tokens.css. */
+
+html { color-scheme: light dark; }
+html, body, #root { height: 100%; }
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-feature-settings: 'cv11', 'ss01';
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection { background: color-mix(in oklab, var(--brand-500) 35%, transparent); }
+
+/* Outline reset only — components own their own focus-visible rings. */
+:focus-visible { outline: none; }
+
+/* Drop default chrome on text-like inputs so the styled wrappers look clean. */
+input:where(:not([type='checkbox']):not([type='radio'])),
+textarea,
+select {
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+/* Scrollbars styled to the theme. */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 8px;
+  border: 2px solid var(--bg);
+}
+::-webkit-scrollbar-thumb:hover { background: var(--fg-subtle); }
