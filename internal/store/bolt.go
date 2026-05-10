@@ -232,8 +232,20 @@ func (s *Store) PutInstance(inst *model.Instance) error {
 	return nil
 }
 
-// Heartbeat updates LastHeartbeat and optionally Status for an existing instance.
+// Heartbeat updates LastHeartbeat and Status for an existing instance.
 // Returns ErrNotFound if the instance is unknown — callers should re-register.
+//
+// Status semantics:
+//   - if the caller passes an explicit status, it wins (lets clients flip
+//     themselves into draining/starting).
+//   - if the caller passes "", we lift Down → Up: the heartbeat itself is
+//     the proof of life. This is the recovery path after a network blip,
+//     laptop sleep, or any other event that let the TTL sweeper mark the
+//     instance Down. Without this lift, the instance stayed red forever
+//     even though its client kept heartbeating.
+//   - other states (draining, starting) are preserved on empty status —
+//     they're explicit operator/client choices, and a heartbeat shouldn't
+//     undo them.
 func (s *Store) Heartbeat(service, id string, status model.Status) (*model.Instance, error) {
 	key := instanceKey(service, id)
 	var updated model.Instance
@@ -248,8 +260,11 @@ func (s *Store) Heartbeat(service, id string, status model.Status) (*model.Insta
 		}
 		updated.LastHeartbeat = time.Now().UTC()
 		updated.UpdatedAt = updated.LastHeartbeat
-		if status != "" {
+		switch {
+		case status != "":
 			updated.Status = status
+		case updated.Status == model.StatusDown:
+			updated.Status = model.StatusUp
 		}
 		buf, err := json.Marshal(&updated)
 		if err != nil {

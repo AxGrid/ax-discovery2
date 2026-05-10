@@ -527,6 +527,7 @@ type instanceInput struct {
 	Status           model.Status      `json:"status,omitempty"`
 	Metadata         map[string]string `json:"metadata,omitempty"`
 	TTLSeconds       int               `json:"ttlSeconds,omitempty"`
+	Managed          bool              `json:"managed,omitempty"`
 	CheckMode        model.CheckMode   `json:"checkMode,omitempty"`
 	CheckIntervalSec int               `json:"checkIntervalSec,omitempty"`
 }
@@ -541,6 +542,7 @@ func (in instanceInput) toModel(serviceName, id string) model.Instance {
 		Status:           in.Status,
 		Metadata:         in.Metadata,
 		TTLSeconds:       in.TTLSeconds,
+		Managed:          in.Managed,
 		CheckMode:        in.CheckMode,
 		CheckIntervalSec: in.CheckIntervalSec,
 	}
@@ -578,6 +580,9 @@ func (s *Server) upsertInstance(w http.ResponseWriter, r *http.Request) {
 	}
 	name := r.PathValue("name")
 	id := r.PathValue("id")
+	if s.rejectManagedEdit(w, r, name, id) {
+		return
+	}
 	var in instanceInput
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
@@ -613,12 +618,34 @@ func (s *Server) deleteInstance(w http.ResponseWriter, r *http.Request) {
 	}
 	name := r.PathValue("name")
 	id := r.PathValue("id")
+	if s.rejectManagedEdit(w, r, name, id) {
+		return
+	}
 	if err := s.store.DeleteInstance(name, id); err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
 	s.audit(r, model.AuditInstanceDeleted, name, "instance", map[string]interface{}{"id": id})
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// rejectManagedEdit blocks edits/deletes of self-registered instances coming
+// from a UI session. System identities (static tokens) bypass the check —
+// that's the path the owning client uses when it re-registers, and it's the
+// admin override.
+//
+// Returns true if the request was already finalised with a 409.
+func (s *Server) rejectManagedEdit(w http.ResponseWriter, r *http.Request, service, id string) bool {
+	inst, err := s.store.GetInstance(service, id)
+	if err != nil || !inst.Managed {
+		return false
+	}
+	if auth.IdentityFrom(r.Context()).System {
+		return false
+	}
+	writeErr(w, http.StatusConflict,
+		errors.New("instance is self-managed by its service; edits from the UI are blocked"))
+	return true
 }
 
 type heartbeatReq struct {

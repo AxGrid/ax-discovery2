@@ -144,6 +144,27 @@ ACL semantics (matches the user spec):
 
 Tags ride along with the rest of the Service blob (gossip + anti-entropy carry them for free). The Go client mirrors all three: `ListServicesByTag`, `ListTags`, `DiscoverByTag`. `Registration.Tags` opportunistically merges into the parent service on `Register` (best-effort — a failed merge does not abort the instance write).
 
+### Managed instances
+
+`Instance.Managed bool` marks an instance as self-registered by a client
+library (the discovery2-client `Register` call always sets it to `true`).
+The server protects such instances from accidental UI edits:
+
+- A user holding a **cookie session** that PUTs or DELETEs a managed
+  instance is rejected with `409 Conflict`. See
+  `(*Server).rejectManagedEdit` in `server.go`.
+- A **system identity** (static bearer token) bypasses the check — that's
+  the path the owning client takes when it re-registers, and also the
+  admin override.
+
+UI surfaces the flag via a "self-managed" badge with a lock icon; the
+Edit and Delete buttons are hidden for managed instances. The Copy
+button stays — copying produces a fresh draft with `managed=false`,
+which the operator can then save as a normal editable instance.
+
+`POST` (register) does **not** consult the flag — only PUT/DELETE on an
+existing managed instance is gated. New registrations are always allowed.
+
 ### Audit
 
 Every mutation goes through `s.audit(r, action, target, targetType, details)`,
@@ -202,6 +223,19 @@ Updates reach the UI via the next status flip event or a page refresh.
 There is **no** global "active probes" flag anymore — probing is per-instance,
 configured at registration. If you need a server-wide default, add it as a
 field on the daemon config and stamp new instances with it.
+
+**Heartbeat recovery semantics.** `store.Heartbeat` lifts `Down → Up` when
+the caller passes an empty status. This is the recovery path after a
+network blip / laptop sleep / anything that lets the TTL sweeper mark an
+instance Down. Without the lift, the instance stayed red forever even
+though its client kept heartbeating (the auto-heartbeat goroutine in
+discovery2-client always sends `""` as status). `Draining` and `Starting`
+are preserved on empty heartbeats — they're explicit operator/client
+choices and a heartbeat shouldn't undo them.
+
+The client also fires one heartbeat **immediately** at the start of the
+loop (not after the first ticker interval) so wake-from-sleep recovery
+takes ≤ one network RTT instead of TTL/3 seconds. Don't revert that.
 
 ### Automatic HTTPS (autocert)
 

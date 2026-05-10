@@ -40,6 +40,7 @@ export interface Instance {
   status: Status;
   metadata?: Record<string, string>;
   ttlSeconds: number;
+  managed?: boolean;
   checkMode?: CheckMode;
   checkIntervalSec?: number;
   lastCheck?: InstanceCheck;

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams, Link } from "react-router-dom";
-import { ArrowLeft, Check, Copy, Hash, Plus, Settings, Trash2 } from "lucide-react";
+import { ArrowLeft, Check, Copy, Hash, Lock, Plus, Settings, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { api, CheckMode, CheckResponse, Instance, Interface, ProbeResult, Service, User, Visibility, watch } from "@/lib/api";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -146,6 +146,7 @@ export default function ServiceDetail() {
       ...inst,
       id: "",
       address: inst.address,
+      managed: false, // operator-made copy is editable, not self-managed
       lastHeartbeat: "",
       registeredAt: "",
       updatedAt: "",
@@ -253,6 +254,11 @@ export default function ServiceDetail() {
                       <span className="font-mono text-sm truncate">{inst.address}</span>
                       <StatusBadge status={inst.status} />
                       <CheckModeBadge mode={inst.checkMode} />
+                      {inst.managed && (
+                        <Badge variant="info" size="sm" title="Self-registered by the service via discovery2-client. UI edits are blocked.">
+                          <Lock className="size-3 mr-1" />self-managed
+                        </Badge>
+                      )}
                       <Badge variant="outline" size="sm">weight {inst.weight}</Badge>
                       {(!inst.checkMode || inst.checkMode === "heartbeat") && (
                         <Badge variant="outline" size="sm">TTL {inst.ttlSeconds}s</Badge>
@@ -275,14 +281,23 @@ export default function ServiceDetail() {
                   </div>
                   {canEdit && (
                     <div className="flex flex-col gap-2 shrink-0">
-                      <Button variant="secondary" size="sm" loading={checking[inst.id]} leftIcon={<Check className="size-3.5" />}
-                        onClick={() => checkNow(inst.id)}>Check</Button>
-                      <Button variant="secondary" size="sm" leftIcon={<Settings className="size-3.5" />}
-                        onClick={() => setEditingInst(inst)}>Edit</Button>
+                      {/* Manual Check is only useful for active probe modes —
+                          on heartbeat-mode it would just re-evaluate TTL,
+                          which the background sweeper does anyway. */}
+                      {(inst.checkMode === "http" || inst.checkMode === "tcp") && (
+                        <Button variant="secondary" size="sm" loading={checking[inst.id]} leftIcon={<Check className="size-3.5" />}
+                          onClick={() => checkNow(inst.id)}>Check</Button>
+                      )}
+                      {!inst.managed && (
+                        <Button variant="secondary" size="sm" leftIcon={<Settings className="size-3.5" />}
+                          onClick={() => setEditingInst(inst)}>Edit</Button>
+                      )}
                       <Button variant="secondary" size="sm" leftIcon={<Copy className="size-3.5" />}
                         onClick={() => copyInstance(inst)}>Copy</Button>
-                      <Button variant="danger" size="sm" leftIcon={<Trash2 className="size-3.5" />}
-                        onClick={() => setPendingDeleteInst(inst.id)}>Delete</Button>
+                      {!inst.managed && (
+                        <Button variant="danger" size="sm" leftIcon={<Trash2 className="size-3.5" />}
+                          onClick={() => setPendingDeleteInst(inst.id)}>Delete</Button>
+                      )}
                     </div>
                   )}
                 </div>

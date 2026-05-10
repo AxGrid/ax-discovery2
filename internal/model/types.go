@@ -127,6 +127,15 @@ type Instance struct {
 	Metadata      map[string]string `json:"metadata,omitempty"`
 	TTLSeconds    int               `json:"ttlSeconds"`
 
+	// Managed marks an instance as self-registered by a client library
+	// (discovery2-client.Register sets it to true). UI sessions cannot
+	// edit or delete a managed instance — only the system identity that
+	// owns it (i.e. the same client coming back with a fresh PUT, or an
+	// admin using a static token) can. This protects the cluster from an
+	// operator accidentally changing fields the client will overwrite on
+	// its next restart.
+	Managed bool `json:"managed,omitempty"`
+
 	// Liveness configuration.
 	CheckMode        CheckMode `json:"checkMode,omitempty"`
 	CheckIntervalSec int       `json:"checkIntervalSec,omitempty"`
