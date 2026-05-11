@@ -1,7 +1,9 @@
 .PHONY: all ui ui-deps run run-cluster build go-build \
         build-linux build-linux-amd64 build-linux-arm64 build-all \
         test clean \
-        vendor docker-build docker-run kamal-setup kamal-deploy kamal-redeploy kamal-logs kamal-status
+        vendor docker-build docker-run \
+        kamal-setup kamal-deploy kamal-redeploy kamal-logs kamal-status kamal-ensure-volume \
+        secrets-edit secrets-encrypt secrets-decrypt secrets-rekey
 
 # Strip symbols + DWARF for cross-built Linux binaries. ~30% smaller, no
 # debugger experience on the binary, but we keep symbols on the native build.
@@ -116,7 +118,7 @@ docker-run: docker-build
 # the first deploy crash-loops with "open bbolt: permission denied"
 # because Docker bind-mounts inherit the host directory's owner, not
 # the image's.
-kamal-setup: vendor kamal-ensure-volume
+kamal-setup: vendor .kamal/secrets kamal-ensure-volume
 	kamal setup
 
 kamal-ensure-volume:
@@ -134,7 +136,7 @@ kamal-ensure-volume:
 # it on every deploy means the bbolt directory's ownership is never the
 # reason a deploy fails — even if someone reboots the host with a fresh
 # /srv or adds a new server to deploy.yml.
-kamal-deploy: vendor kamal-ensure-volume
+kamal-deploy: vendor .kamal/secrets kamal-ensure-volume
 	kamal deploy
 
 # Same image + same env, fresh container. Use after editing
@@ -147,3 +149,63 @@ kamal-logs:
 
 kamal-status:
 	kamal app details
+
+# --- sops / age secrets management --------------------------------------
+# .kamal/secrets is the plaintext dotenv file Kamal sources at deploy
+# time. It is gitignored. The encrypted twin .kamal/secrets.enc IS
+# committed — recipients listed in .sops.yaml can decrypt it.
+#
+# Identity: operators reuse their SSH ed25519 key. The age recipient
+# (an `age1...` string) is derived from the SSH public key once via
+# `ssh-to-age < ~/.ssh/<key>.pub` and pasted into .sops.yaml. The
+# matching private key lives at:
+#     ~/Library/Application Support/sops/age/keys.txt   (macOS)
+#     ~/.config/sops/age/keys.txt                       (Linux)
+# and is generated once with:
+#     ssh-to-age -private-key -i ~/.ssh/<key> > <keys.txt path>
+#     chmod 0600 <keys.txt path>
+# That's the *only* place plaintext age private material exists. It's
+# OS-scoped, not repo-scoped — never check it in.
+#
+# Workflow:
+#   first-time clone:   set up keys.txt (above), then `make secrets-decrypt`
+#   add/edit a secret:  make secrets-edit           (sops opens $EDITOR, re-encrypts on save)
+#                                                    then commit .kamal/secrets.enc
+#   add a recipient:    edit .sops.yaml, then       make secrets-rekey
+#                                                    then commit both files
+#
+# Day-to-day deploys auto-decrypt — `kamal-deploy` depends on
+# `.kamal/secrets`, which has a rule that derives it from .enc when missing
+# or older than the encrypted source.
+
+# Auto-decrypt: if .kamal/secrets is missing or older than the encrypted
+# twin, regenerate it. Idempotent — re-runs are no-ops in steady state.
+.kamal/secrets: .kamal/secrets.enc
+	@echo "decrypting .kamal/secrets.enc → .kamal/secrets"
+	@sops --decrypt --input-type dotenv --output-type dotenv .kamal/secrets.enc > .kamal/secrets
+	@chmod 0600 .kamal/secrets
+
+# Open the encrypted file in $EDITOR. sops decrypts to a temp file, opens
+# the editor, and re-encrypts on save with the recipients from .sops.yaml.
+# Use this for any change — it never writes plaintext to disk.
+secrets-edit:
+	sops .kamal/secrets.enc
+
+# One-shot: take an existing plaintext .kamal/secrets and produce
+# .kamal/secrets.enc. Use only the first time, before .kamal/secrets.enc
+# exists. After that, `secrets-edit` is the way.
+secrets-encrypt:
+	@if [ ! -f .kamal/secrets ]; then echo "no .kamal/secrets to encrypt"; exit 1; fi
+	cp .kamal/secrets .kamal/secrets.enc
+	sops --encrypt --in-place --input-type dotenv --output-type dotenv .kamal/secrets.enc
+
+# Decrypt explicitly. Same as the file-target rule above but always runs.
+secrets-decrypt:
+	sops --decrypt --input-type dotenv --output-type dotenv .kamal/secrets.enc > .kamal/secrets
+	chmod 0600 .kamal/secrets
+
+# Re-encrypt for the current set of recipients in .sops.yaml. Run after
+# adding/removing operators. Doesn't change any secret values — only
+# the wrapped data-encryption keys.
+secrets-rekey:
+	sops updatekeys --yes .kamal/secrets.enc

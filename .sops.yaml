@@ -1,0 +1,30 @@
+# sops configuration: which age recipients can decrypt which files.
+#
+# The recipient list is the set of public keys (`age1...`) of every
+# person/machine that's allowed to read the encrypted file. Each
+# recipient must have the matching private key in
+# `~/Library/Application Support/sops/age/keys.txt` (macOS) or
+# `~/.config/sops/age/keys.txt` (Linux).
+#
+# How to add a new operator:
+#   1. They run `age-keygen` on their machine and tell you their `age1...` pubkey.
+#   2. You append it to the `age:` value below (comma-separated, NO spaces).
+#   3. You run `make secrets-rekey` to re-encrypt the file for the new set
+#      of recipients. Old recipients keep working; the new one starts working
+#      immediately.
+#
+# To revoke an operator (someone leaves the team / laptop stolen):
+#   1. Remove their pubkey from the list.
+#   2. `make secrets-rekey`.
+#   3. **Rotate the actual secret values** — the leaver still has the old
+#      ciphertext from git history and their private key, so just rekeying
+#      isn't enough. Regenerate the registry token / corp-ui API key / etc.
+
+# Recipients are age public keys. Operators using SSH ed25519 keys
+# can derive their age recipient with `ssh-to-age < ~/.ssh/<key>.pub`.
+# The matching private key is whatever they configure sops to read —
+# either an age-format keys.txt (derived once via `ssh-to-age -private-key`)
+# or the env var SOPS_AGE_SSH_PRIVATE_KEY_FILE pointing at the SSH key.
+creation_rules:
+  - path_regex: \.kamal/secrets\.enc$
+    age: age13l8udx8p4y0tfv2ej3t66edgvfk3luug257x4ljtfgds4kwf3pzq5hn38n
