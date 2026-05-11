@@ -1,8 +1,13 @@
-# discovery2
+# discovery2 — `corp-module` branch
 
 Service-discovery server with a built-in React UI, gossip-based clustering,
-login/password auth, per-service ACL, and an audit trail. Single self-contained
-Go binary — no external database.
+**[corp-ui](https://github.com/corp-ui/corp-ui) SSO** (hybrid iframe + custom
+login page), per-service ACL, and an audit trail. Single self-contained Go
+binary — bbolt for state, no external DB.
+
+> This is the corp-module fork of upstream discovery2. Auth is delegated to
+> corp-ui; there is no local user store. For the upstream local-users
+> variant, use `master`.
 
 The companion Go client library is its own repository:
 [github.com/axgrid/discovery2-client](https://github.com/axgrid/discovery2-client).
@@ -30,11 +35,15 @@ The companion Go client library is its own repository:
   (`hashicorp/memberlist`), broadcast change events, and reconcile via
   periodic anti-entropy snapshots. Last-write-wins on `UpdatedAt`. Peers can
   be added at runtime from the UI by an admin.
-- **Login + per-service ACL.** Cookie-session auth for the UI, static API
-  tokens for service-to-service traffic. Services are `public` (any
-  authenticated user can edit) or `private` (only owner / admin / explicitly-
-  granted users can edit). Discovery is unrestricted regardless of visibility.
-- **Audit log.** Every mutation (service / instance / user / grant / login /
+- **Corp-ui SSO + per-service ACL.** Users live in corp-ui. Two parallel
+  paths: iframe-token Bearer (introspected via corp-ui's `/api/iframe/introspect`)
+  or our own `/v1/auth/login` form that delegates to corp-ui's
+  `verify-password` server-to-server and mints a short-lived cookie session.
+  Static API tokens still work for service-to-service traffic. Services are
+  `public` (any authenticated user can edit) or `private` (only owner /
+  admin / explicitly-granted users can edit). Discovery is unrestricted
+  regardless of visibility.
+- **Audit log.** Every mutation (service / instance / grant / login /
   cluster join) is recorded with actor, target, and a details blob; admins
   browse it in the UI with filtering by service.
 - **Storage:** embedded BoltDB, single file. UI is embedded into the binary.
@@ -44,14 +53,23 @@ The companion Go client library is its own repository:
 ## Quick start
 
 ```bash
-cp .env.example .env       # adjust DISCOVERY_DEFAULT_ADMIN_PASSWORD at minimum
+cp .env.example .env       # set CORP_URL + CORP_API_KEY at minimum
 make build                 # builds UI + binary; output at ./discoveryd
 ./discoveryd
 ```
 
-Open <http://localhost:8500> and sign in with the credentials from `.env`.
-On first launch, if no users exist, an admin is auto-created from
-`DISCOVERY_DEFAULT_ADMIN_USER` / `DISCOVERY_DEFAULT_ADMIN_PASSWORD`.
+Open <http://localhost:8500> and sign in with your **corp-ui** credentials.
+Without `CORP_URL` set, the login form refuses to submit — discovery has
+no local fallback user. For air-gapped clusters / CI, use a static admin
+token (`DISCOVERY_ADMIN_TOKENS`) as `Authorization: Bearer ...`.
+
+First-time setup in corp-ui:
+
+1. `Admin → Services → New`: slug `discovery`, iframe URL (your discovery host).
+2. `Admin → Services → discovery → Edit → Regenerate API key` — paste the
+   `cks_...` value into `CORP_API_KEY`.
+3. `Admin → Groups → Permissions`: grant `discovery` r/w/a to the groups
+   that should see discovery in the sidebar.
 
 ### Cross-compile for Linux
 
@@ -88,10 +106,15 @@ All flags also accept env vars (`DISCOVERY_*`). See `.env.example`.
 | `-advertise-api` | `DISCOVERY_ADVERTISE_API` | `127.0.0.1:<port>` | host:port peers should use to reach our HTTP API |
 | `-seeds` | `DISCOVERY_SEEDS` | (none) | comma-separated `host:port` |
 | `-cluster-token` | `DISCOVERY_CLUSTER_TOKEN` | (none) | shared secret for `/cluster/*` |
-| `-read-tokens` / `-write-tokens` / `-admin-tokens` | `DISCOVERY_*_TOKENS` | (none) | comma-separated |
+| `-read-tokens` / `-write-tokens` / `-admin-tokens` | `DISCOVERY_*_TOKENS` | (none) | comma-separated; bypass corp-ui as `system` identity |
 | `-allow-anonymous-read` | `DISCOVERY_ALLOW_ANON_READ` | `true` | |
-| `-default-admin-user` | `DISCOVERY_DEFAULT_ADMIN_USER` | `admin` | Bootstrap admin username (only created if no users exist) |
-| `-default-admin-password` | `DISCOVERY_DEFAULT_ADMIN_PASSWORD` | `admin` | Bootstrap admin password |
+| `-corp-url` | `CORP_URL` | (none) | base URL of the corp-ui console — required for UI login |
+| `-corp-api-key` | `CORP_API_KEY` | (none) | per-service API key from corp-ui |
+| `-corp-slug` | `CORP_SERVICE_SLUG` | `discovery` | slug discovery is registered under in corp-ui |
+| `-corp-perm-key` | `CORP_PERM_KEY` | `discovery` | corp-ui permission key whose r/w/a gates discovery |
+| `-ax-router-host` | `AX_ROUTER_HOST` | (none) | optional ax-router2 reverse-router host; empty = no registration |
+| `-ax-router-token` | `AX_ROUTER_TOKEN` | (none) | ax-router2 shared token |
+| `-ax-router-name` | `AX_ROUTER_NAME` | `discovery` | service name to advertise on ax-router2 |
 | `-acme` | `DISCOVERY_ACME_ENABLE` | `false` | Enable automatic HTTPS via Let's Encrypt |
 | `-acme-domains` | `DISCOVERY_ACME_DOMAINS` | (none) | Comma-separated hostnames the server is allowed to issue certs for |
 | `-acme-email` | `DISCOVERY_ACME_EMAIL` | (none) | Optional contact email registered with Let's Encrypt |
@@ -141,10 +164,11 @@ cert is issued; subsequent requests use the cache.
 ## REST API
 
 ```
-# Auth (cookie session)
-POST   /v1/auth/login           # body: {"username":"...","password":"..."}
+# Auth — cookie session (standalone) OR iframe Bearer JWT (corp-ui)
+POST   /v1/auth/login           # body: {"identifier":"email-or-username","password":"..."}
 POST   /v1/auth/logout
-GET    /v1/auth/me
+GET    /v1/auth/me              # returns identity + perms snapshot + iframe flag
+GET    /v1/corp/users/search?q= # admin-only; proxies corp-ui user lookup for grants editor
 
 # Services & instances (writes require write access; private services check ACL)
 GET    /v1/services
@@ -172,18 +196,27 @@ POST   /v1/cluster/join                             # admin; body: {"seeds":["ho
 GET    /v1/health
 GET    /v1/watch                                    # WebSocket → DiscoveryEvent
 
-# Users & audit (admin only)
-GET    /v1/users
-POST   /v1/users
-PUT    /v1/users/{id}
-DELETE /v1/users/{id}
+# Audit (admin only — users themselves live in corp-ui)
 GET    /v1/audit?limit=N&service=NAME
 ```
 
-**Auth** for UI calls: cookie session (`discovery_session`). For
-service-to-service traffic, static tokens still work via
-`Authorization: Bearer <token>` / `X-API-Token` / `?token=` — they identify
-as `system` and bypass ACL on services.
+**Auth** for UI calls:
+
+- **Standalone:** cookie session (`discovery_session`) minted by `/v1/auth/login`
+  after corp-ui's `verify-password` validates the credentials. Sessions are
+  short (15 min) — corp-ui group changes propagate on next login.
+- **Iframe:** Bearer JWT from the corp-ui host, introspected per-request via
+  `corp.Client.Introspect` (30s cache). The UI auto-detects iframe via
+  `window.parent !== window` and dynamically loads `corp-sdk.js` from the
+  parent origin (see `ui/web/src/lib/corp.ts`).
+
+For service-to-service traffic, static tokens (`DISCOVERY_*_TOKENS`) still
+work via `Authorization: Bearer <token>` / `X-API-Token` / `?token=` — they
+identify as `system` and bypass corp-ui + per-service ACL.
+
+`Service.OwnerID` and `Service.Grants` hold **stringified corp-ui user IDs**.
+Pre-fork UUID owners won't match anyone in corp-ui — services migrated from
+the upstream `master` branch need to be re-owned.
 
 ## Go client
 
@@ -222,6 +255,192 @@ Strategies: `RoundRobin`, `Random`, `Weighted`.
 
 If you use Claude Code, the **`/ax-discovery2-client`** skill walks you through the integration interactively.
 
+## Deploy with Kamal
+
+The fork ships a [Kamal 2](https://kamal-deploy.org/) deploy: Dockerfile,
+`config/deploy.yml`, `.kamal/hooks/pre-deploy` and `.kamal/secrets.enc`
+(encrypted secrets file, see next section). Single host, kamal-proxy
+fronts the container on `:443` with Let's Encrypt.
+
+```bash
+gem install kamal                                           # one-time, on your laptop
+ssh root@<host> 'curl -fsSL https://get.docker.com | sh'    # if Docker isn't installed
+kamal proxy boot --ssl-email <you>@<domain>                 # one-time per host: LE contact
+make secrets-decrypt                                        # see "Secrets" below
+make kamal-setup                                            # first deploy
+```
+
+After that, day-to-day deploys:
+
+```bash
+make kamal-deploy           # rebuild image + push + rolling restart
+make kamal-logs             # tail container logs
+make kamal-status           # what's running, which image SHA
+kamal rollback <version>    # revert to a previous image
+```
+
+What the Make targets do:
+
+- `vendor` runs `go mod vendor` so the Docker build can resolve the
+  local-path `replace` for corp-ui's SDK (no internet-published module).
+- `kamal-ensure-volume` SSHs to every web host and `chown -R 10001:10001`
+  on `/srv/ax-discovery2/data`. Docker bind-mounts inherit host directory
+  ownership, and the container runs as uid 10001 (the `discovery` user
+  from the Dockerfile); without this, bbolt crashes with EACCES on first
+  open and kamal-proxy times out the healthcheck.
+- `kamal-deploy` depends on the two above plus the encrypted-secrets
+  decrypt rule (`.kamal/secrets`), so a fresh clone deploys end-to-end
+  with one command.
+
+`config/deploy.yml` highlights:
+
+- `proxy.ssl: true` + `proxy.host: <domain>` — kamal-proxy obtains and
+  rotates Let's Encrypt certs automatically. ACME inside discovery is
+  switched OFF (`DISCOVERY_ACME_ENABLE=false`) — only one of the two
+  should manage TLS.
+- `proxy.healthcheck.path: /v1/health` — unauthenticated probe; rolling
+  restarts wait for 200 before switching traffic.
+- `volumes: ["/srv/ax-discovery2/data:/data"]` — host bind-mount for the
+  bbolt file. Survives container replacement; backup is plain `rsync`.
+- `env.clear:` for non-secret config (CORP_URL, slug, perm key, node id).
+- `env.secret:` for `CORP_API_KEY` and `DISCOVERY_ADMIN_TOKENS`, sourced
+  from `.kamal/secrets`.
+
+## Secrets with sops + age (SSH key as identity)
+
+`.kamal/secrets` (plaintext dotenv) is gitignored. The encrypted twin
+**`.kamal/secrets.enc` IS committed** — recipients listed in `.sops.yaml`
+can decrypt it on a fresh clone with their age private key. This lets you
+push secrets to the repo without leaking them.
+
+Tooling:
+
+```bash
+brew install age sops
+go install github.com/Mic92/ssh-to-age/cmd/ssh-to-age@latest
+```
+
+`ssh-to-age` is not in brew — it's a small Go tool that derives an age
+recipient/identity from an SSH ed25519 keypair. The math is deterministic
+(Ed25519 → Curve25519 conversion), so the same SSH key always maps to the
+same age recipient. **This means you don't need a second keypair** — your
+existing `~/.ssh/<key>` works for both SSH login and age decryption.
+
+### First-time operator setup
+
+1. **Derive your age recipient** (public, paste into `.sops.yaml`):
+
+   ```bash
+   ssh-to-age < ~/.ssh/zed_ed25519.pub
+   # → age13l8udx8p4y0tfv2ej3t66edgvfk3luug257x4ljtfgds4kwf3pzq5hn38n
+   ```
+
+2. **Derive your age private key** and write it to where sops looks for it:
+
+   ```bash
+   # macOS
+   KEYDIR="$HOME/Library/Application Support/sops/age"
+   # Linux
+   # KEYDIR="$HOME/.config/sops/age"
+
+   mkdir -p "$KEYDIR" && chmod 0700 "$KEYDIR"
+   ssh-to-age -private-key -i ~/.ssh/zed_ed25519 > "$KEYDIR/keys.txt"
+   chmod 0600 "$KEYDIR/keys.txt"
+   ```
+
+   That file is the **only** place plaintext age private material exists.
+   It's OS-scoped (per-user, per-machine), never enters the repo.
+
+3. **Decrypt secrets locally:**
+
+   ```bash
+   make secrets-decrypt        # produces .kamal/secrets from .enc
+   ```
+
+   If the recipient in `.sops.yaml` doesn't include your age pubkey, you'll
+   get `no key could decrypt the data` — ask whoever has access to add you
+   (next section) and pull again.
+
+### Day-to-day workflow
+
+| Action | Command |
+|---|---|
+| Edit secrets (in-memory, never writes plaintext) | `make secrets-edit` |
+| Re-create plaintext from `.enc` (no edits) | `make secrets-decrypt` |
+| Encrypt a freshly-edited `.kamal/secrets` (rare; prefer `secrets-edit`) | `make secrets-encrypt` |
+| Re-wrap the file for the current recipient set after `.sops.yaml` change | `make secrets-rekey` |
+
+`make kamal-deploy` auto-decrypts: `.kamal/secrets` is a Make file target
+that depends on `.kamal/secrets.enc`, so it regenerates whenever the
+encrypted version is newer (a fresh `git pull` after a teammate edited
+secrets, for example).
+
+### Add a new operator
+
+On **their** machine:
+
+```bash
+go install github.com/Mic92/ssh-to-age/cmd/ssh-to-age@latest
+ssh-to-age < ~/.ssh/<their_key>.pub          # → age1xyz...
+```
+
+On **your** machine (already a recipient):
+
+```yaml
+# .sops.yaml
+creation_rules:
+  - path_regex: \.kamal/secrets\.enc$
+    age: age13l8udx8p4y0tfv2ej3t66edgvfk3luug257x4ljtfgds4kwf3pzq5hn38n,age1xyz...
+```
+
+```bash
+make secrets-rekey         # re-wraps the data key for both recipients
+git add .sops.yaml .kamal/secrets.enc
+git commit -m 'sops: add <name>'
+git push
+```
+
+On **their** machine again, after `git pull`:
+
+```bash
+ssh-to-age -private-key -i ~/.ssh/<their_key> > "$KEYDIR/keys.txt"
+chmod 0600 "$KEYDIR/keys.txt"
+make secrets-decrypt
+```
+
+### Revoke an operator
+
+`make secrets-rekey` (after removing their recipient) is **not enough** —
+the leaver still has the old ciphertext from git history and their private
+key, so they can decrypt the previous version forever.
+
+The correct flow:
+
+1. Remove their `age1...` from `.sops.yaml`.
+2. **Rotate the actual secret values** — regenerate the registry token,
+   regenerate `CORP_API_KEY` in corp-ui, regenerate `DISCOVERY_ADMIN_TOKENS`.
+3. `make secrets-edit` and paste the new values.
+4. `make secrets-rekey` (now only encrypts for remaining recipients).
+5. Commit and push.
+
+Only step 2 invalidates the leaver's access.
+
+### How it works (the short version)
+
+- **age** is the encryption primitive: an `age1...` recipient is an X25519
+  public key; the matching identity is `AGE-SECRET-KEY-1...`.
+- **sops** encrypts **values** in structured files (YAML, JSON, dotenv,
+  INI), leaving keys visible. That keeps `git diff` readable — you can see
+  *which* secret changed without seeing *what* it changed to.
+- **`.sops.yaml`** is the policy file: a list of `creation_rules`, each
+  with a `path_regex` and a recipient list. When you encrypt a file, sops
+  finds the rule whose regex matches and uses those recipients.
+- **SSH ed25519 ↔ age:** Ed25519 (used by OpenSSH) and X25519 (used by
+  age) are the same Curve25519 in different forms; the conversion is
+  deterministic. `ssh-to-age` does that conversion in both directions.
+  Net result: your SSH key is *also* your age key, no second keypair to
+  manage or back up separately.
+
 ## Development
 
 ```bash
@@ -234,4 +453,4 @@ cd ui/web && npm run dev
 
 For maintainers and AI assistants: see [`CLAUDE.md`](CLAUDE.md) for
 architecture notes, invariants, and known landmines (macOS codesigning,
-JSON-time decoding, gossip echo loops, etc.).
+JSON-time decoding, gossip echo loops, corp-ui iframe contract, etc.).
