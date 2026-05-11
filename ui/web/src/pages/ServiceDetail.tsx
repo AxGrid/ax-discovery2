@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams, Link } from "react-router-dom";
 import { ArrowLeft, Check, Copy, Hash, Lock, Plus, Settings, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { api, CheckMode, CheckResponse, Instance, Interface, ProbeResult, Service, User, Visibility, watch } from "@/lib/api";
+import { api, CheckMode, CheckResponse, CorpUserHit, Instance, Interface, ProbeResult, Service, Visibility, watch } from "@/lib/api";
 import { StatusBadge } from "@/components/StatusBadge";
 import { useAuth } from "@/lib/auth";
 import { VisibilityBadge } from "./Services";
@@ -19,7 +19,6 @@ export default function ServiceDetail() {
   const { me } = useAuth();
   const [service, setService] = useState<Service | null>(null);
   const [instances, setInstances] = useState<Instance[]>([]);
-  const [allUsers, setAllUsers] = useState<User[] | null>(null);
   const [editingInst, setEditingInst] = useState<Instance | null>(null);
   const [editingMeta, setEditingMeta] = useState(false);
   const [confirmDeleteService, setConfirmDeleteService] = useState(false);
@@ -43,12 +42,6 @@ export default function ServiceDetail() {
     const stop = watch(ev => { if (ev.service === name) refresh(); });
     return stop;
   }, [name]);
-
-  useEffect(() => {
-    if (me?.isAdmin) {
-      api.listUsers().then(setAllUsers).catch(() => setAllUsers(null));
-    }
-  }, [me?.isAdmin]);
 
   const canEdit = useMemo(() => {
     if (!service || !me) return false;
@@ -218,7 +211,6 @@ export default function ServiceDetail() {
       {editingMeta && service && (
         <ServiceMetaEditor
           service={service}
-          users={allUsers}
           canManageGrants={canManageGrants}
           onClose={() => setEditingMeta(false)}
           onSave={saveMeta}
@@ -411,10 +403,9 @@ function fmtTime(iso: string): string {
 // --- Service settings (visibility, grants, rename) ---
 
 function ServiceMetaEditor({
-  service, users, canManageGrants, onClose, onSave, onRename, onAddGrant, onRemoveGrant,
+  service, canManageGrants, onClose, onSave, onRename, onAddGrant, onRemoveGrant,
 }: {
   service: Service;
-  users: User[] | null;
   canManageGrants: boolean;
   onClose: () => void;
   onSave: (patch: Partial<Service>) => void;
@@ -427,10 +418,33 @@ function ServiceMetaEditor({
   const [tags, setTags] = useState((service.tags || []).join(", "));
   const [visibility, setVisibility] = useState<Visibility>(service.visibility || "public");
   const [grantInput, setGrantInput] = useState("");
+  const [grantHit, setGrantHit] = useState<CorpUserHit | null>(null);
+  const [grantBusy, setGrantBusy] = useState(false);
+  const [grantError, setGrantError] = useState<string | null>(null);
 
   function userLabel(id: string) {
-    const u = users?.find(x => x.id === id);
-    return u ? `${u.username}${u.displayName ? ` (${u.displayName})` : ""}` : id;
+    return id; // Owner/grant IDs are corp-ui user IDs; the human label
+               // would require a corp lookup per ID. Keep the IDs visible
+               // here — search-by-identifier below resolves on demand.
+  }
+
+  async function searchCorp() {
+    setGrantError(null);
+    setGrantHit(null);
+    if (!grantInput.trim()) return;
+    setGrantBusy(true);
+    try {
+      const hits = await api.searchCorpUsers(grantInput.trim());
+      if (hits.length === 0) {
+        setGrantError("no user found in corp-ui");
+      } else {
+        setGrantHit(hits[0]);
+      }
+    } catch (e: any) {
+      setGrantError(e.message || "search failed");
+    } finally {
+      setGrantBusy(false);
+    }
   }
 
   function handleSave() {
@@ -498,23 +512,32 @@ function ServiceMetaEditor({
             </ul>
           )}
           {canManageGrants && (
-            <div className="flex gap-2">
-              {users ? (
-                <Select value={grantInput} onValueChange={setGrantInput}>
-                  <SelectTrigger className="flex-1"><SelectValue placeholder="— select user —" /></SelectTrigger>
-                  <SelectContent>
-                    {users.filter(u => u.id !== service.ownerId && !(service.grants || []).includes(u.id))
-                      .map(u => <SelectItem key={u.id} value={u.id}>{u.username}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              ) : (
-                <Input className="flex-1" placeholder="user id"
-                  value={grantInput} onChange={e => setGrantInput(e.target.value)} />
+            <div className="space-y-2">
+              <div className="flex gap-2">
+                <Input className="flex-1" placeholder="email or username (in corp-ui)"
+                  value={grantInput} onChange={e => { setGrantInput(e.target.value); setGrantHit(null); setGrantError(null); }} />
+                <Button variant="secondary" disabled={grantBusy || !grantInput.trim()} onClick={searchCorp}>
+                  {grantBusy ? "…" : "Find"}
+                </Button>
+                <Button variant="primary"
+                  disabled={!grantHit}
+                  onClick={() => {
+                    if (grantHit) {
+                      onAddGrant(grantHit.id);
+                      setGrantInput("");
+                      setGrantHit(null);
+                    }
+                  }}>
+                  Grant
+                </Button>
+              </div>
+              {grantError && <div className="text-xs text-danger">{grantError}</div>}
+              {grantHit && (
+                <div className="text-xs text-fg-muted">
+                  Found <span className="font-mono">{grantHit.email || grantHit.username || grantHit.id}</span>
+                  {" "}— click Grant to add.
+                </div>
               )}
-              <Button variant="secondary"
-                onClick={() => { if (grantInput) { onAddGrant(grantInput); setGrantInput(""); } }}>
-                Grant
-              </Button>
             </div>
           )}
         </div>

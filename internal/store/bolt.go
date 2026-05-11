@@ -14,15 +14,13 @@ import (
 )
 
 var (
-	bktServices    = []byte("services")
-	bktInstances   = []byte("instances")
-	bktUsers       = []byte("users")
-	bktUsersByName = []byte("users_by_name") // username -> userID
-	bktSessions    = []byte("sessions")
-	bktAudit       = []byte("audit") // key: timestamp_unix_nano + "/" + uuid (sorted ascending)
+	bktServices  = []byte("services")
+	bktInstances = []byte("instances")
+	bktSessions  = []byte("sessions")
+	bktAudit     = []byte("audit") // key: timestamp_unix_nano + "/" + uuid (sorted ascending)
 
-	ErrNotFound  = errors.New("not found")
-	ErrConflict  = errors.New("conflict")
+	ErrNotFound = errors.New("not found")
+	ErrConflict = errors.New("conflict")
 )
 
 // Subscriber receives change events. The channel is closed when Unsubscribe is called.
@@ -47,7 +45,7 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("open bbolt: %w", err)
 	}
 	err = db.Update(func(tx *bolt.Tx) error {
-		for _, b := range [][]byte{bktServices, bktInstances, bktUsers, bktUsersByName, bktSessions, bktAudit} {
+		for _, b := range [][]byte{bktServices, bktInstances, bktSessions, bktAudit} {
 			if _, err := tx.CreateBucketIfNotExists(b); err != nil {
 				return err
 			}

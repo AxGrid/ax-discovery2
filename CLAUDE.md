@@ -1,9 +1,14 @@
 # CLAUDE.md
 
-Operational notes for Claude Code working in **discovery2** — a single-binary
-service-discovery server (Go) with an embedded React UI, gossip-based
-clustering, login/password auth, and a per-service ACL model. Read this once
-at the start of a session; the per-file conventions below apply throughout.
+Operational notes for Claude Code working in **discovery2** (the
+`corp-module` branch) — a single-binary service-discovery server (Go) with
+an embedded React UI, gossip-based clustering, **corp-ui-backed auth**,
+and a per-service ACL model keyed by corp-ui user IDs. Read this once at
+the start of a session; the per-file conventions below apply throughout.
+
+This branch is a fork of `master` that swaps the local users / bcrypt /
+sessions stack for corp-ui SSO. Users are not stored locally anymore;
+permissions come from corp-ui's `is_admin` flag and the `perms` map.
 
 For the user-facing project description, see [`README.md`](README.md).
 The companion Go client library is its own repo at
@@ -39,29 +44,29 @@ The companion Go client library is its own repo at
 ## Repo map (where things live)
 
 ```
-cmd/discoveryd/main.go             # entrypoint; loads .env, bootstraps default admin, starts goroutines
+cmd/discoveryd/main.go             # entrypoint; loads .env, builds corp.Client, optional ax-router registration, starts goroutines
 internal/
-├── model/types.go                 # all wire types: Service, Instance, Interface, User,
-│                                  # Session, AuditEntry, Event, Visibility, Status; constants
+├── model/types.go                 # all wire types: Service, Instance, Interface, Session,
+│                                  # AuditEntry, Event, Visibility, Status; constants. NO local User type.
 ├── store/                         # bbolt persistence + in-memory pub/sub (events fan-out)
 │   ├── bolt.go                    # Open/Close, services + instances, Subscriber/emit, Snapshot, ApplyRemote
 │   ├── rename.go                  # RenameService (atomic move of service + all instances)
-│   ├── users.go                   # PutUser/GetUser/GetUserByUsername/ListUsers/DeleteUser/CountUsers
-│   ├── sessions.go                # PutSession/GetSession/DeleteSession/SweepExpiredSessions
+│   ├── sessions.go                # PutSession/GetSession/DeleteSession/SweepExpiredSessions (browser sessions only)
 │   └── audit.go                   # AppendAudit/ListAudit (timestamp-keyed, reverse cursor)
 ├── auth/
-│   ├── auth.go                    # static-token Authenticator (legacy, kept for service-to-service)
-│   └── identity.go                # Resolver: cookie OR token → Identity; bcrypt + session helpers; CanEditService
+│   ├── auth.go                    # static-token Authenticator (s2s tokens, untouched)
+│   └── identity.go                # Resolver: cookie OR static token OR iframe-JWT → Identity;
+│                                  # corp.Client integration; RoleFromPerms; CanEditService
 ├── health/health.go               # TTL sweeper + optional active TCP/HTTP probes
 ├── cluster/cluster.go             # memberlist plumbing, broadcast, anti-entropy snapshots
 └── server/
-    ├── server.go                  # Run(), routes(), service/instance/discover/watch handlers, CORS
+    ├── server.go                  # Run(), routes(), service/instance/discover/watch handlers, CORS, loginLimiter
     ├── hub.go                     # WebSocket fan-out for /v1/watch
-    ├── auth_handlers.go           # /v1/auth/{login,logout,me} + s.audit() helper + safeStoreErr
-    ├── users_handlers.go          # /v1/users CRUD (admin)
-    ├── grants_handlers.go         # /v1/services/{name}/grants (owner or admin)
+    ├── auth_handlers.go           # /v1/auth/{login,logout,me}, /v1/corp/users/search,
+    │                              # verify-password helper, requireAdmin, audit helper, safeStoreErr
+    ├── grants_handlers.go         # /v1/services/{name}/grants (owner or admin), corp user IDs
     ├── audit_handlers.go          # /v1/audit (admin)
-    └── *_test.go                  # uses static-token bearer for write tests; resolver path covers both auths
+    └── *_test.go                  # uses static-token bearer for write tests; corp-ui path is integration-only
 
 ui/
 ├── embed.go                       # //go:embed all:dist
@@ -76,14 +81,18 @@ ui/
         ├── lib/
         │   ├── api.ts             # fetch wrapper (credentials: include); types; watch() WS reconnect
         │   └── auth.tsx           # AuthProvider, useAuth(); login/logout/refresh
+        ├── lib/
+        │   ├── corp.ts            # iframe detection, CorpSDK lazy-loader, theme sync
+        │   └── …
         ├── components/
         │   ├── ui/                # vendored ax-styler — Button, Input, Card, Dialog, Select, Switch,
         │   │                      # Checkbox, Tabs, Tooltip, Avatar, ThemeToggle, theme.tsx, i18n.tsx, ...
-        │   ├── AppShell.tsx       # sidebar w/ admin links + ThemeToggle from ui/
+        │   ├── AppShell.tsx       # sidebar w/ admin links + ThemeToggle (hides Sign Out in iframe mode)
         │   ├── Logo.tsx           # project-specific brand logo (orange gradient)
         │   └── StatusBadge.tsx    # thin wrapper over ax-styler Badge for instance up/down
-        └── pages/                 # Login, Services, ServiceDetail (incl. visibility+grants editor),
-                                   # Cluster, Users, Audit, About
+        └── pages/                 # Login (standalone-only form + iframe fallback message),
+                                   # Services, ServiceDetail (corp-user-search grants editor),
+                                   # Cluster, Audit, About
 
 .env.example                       # template for runtime config
 Makefile                           # ui → go-build → cp bin/discoveryd ./discoveryd
@@ -113,13 +122,33 @@ The binary lives at `./discoveryd` (project root) so it sits next to `.env`.
 
 ## Architecture invariants
 
-### Identity & auth
+### Identity & auth (corp-ui)
 
-Two parallel auth modes, resolved by `auth.Resolver.Resolve(*http.Request)`:
+There is no local user store. Identities come from corp-ui via two
+parallel paths, resolved by `auth.Resolver.Resolve(*http.Request)` in
+this order:
 
-1. **Cookie session** (`discovery_session`) → looks up user → `Identity{UserID, IsAdmin, Role}`.
-2. **Static token** (`Authorization: Bearer <token>` or `X-API-Token` or `?token=`) → `Identity{System: true, Role: ...}`.
-3. **Otherwise anonymous** with whatever role `AllowAnonymousRead` permits (default `RoleRead`).
+1. **Cookie session** (`discovery_session`) — minted by our own
+   `/v1/auth/login` after corp-ui's `POST /api/v1/auth/verify-password`
+   accepted the credentials. The session row caches the corp-ui user's
+   id/email/perms; **TTL is 15 min** (see `auth.SessionTTL`) — short
+   enough that corp-ui group changes propagate without admin
+   intervention.
+2. **Bearer token** — tried first as a static service token
+   (`DISCOVERY_*_TOKENS`); if no match, treated as an iframe JWT and
+   introspected via `corp.Client.Introspect` (the SDK has a 30s
+   per-token cache).
+3. **Otherwise anonymous** with whatever role `AllowAnonymousRead` permits.
+
+The corp-ui `perms` map is collapsed into the legacy `Role` enum by
+`auth.RoleFromPerms(isAdmin, perms, permKey)`:
+
+- `is_admin=true` OR `*:a` OR `<permKey>:a` → `RoleAdmin`
+- `*:w` OR `<permKey>:w` → `RoleWrite`
+- `*:r` OR `<permKey>:r` → `RoleRead`
+- nothing → `RoleNone`
+
+`permKey` defaults to `discovery` and is configurable via `CORP_PERM_KEY`.
 
 Every `/v1` route is wrapped in `resolver.Middleware(auth.RoleNone, ...)` — that
 attaches `Identity` to the context but does **not** itself reject anonymous
@@ -127,12 +156,39 @@ calls. Per-handler `requireRead` / `requireWrite` / `requireAdmin` enforce the
 minimum role, and `auth.CanEditService(svc, identity)` enforces per-service ACL
 on mutations.
 
-ACL semantics (matches the user spec):
+ACL semantics:
 
+- `Service.OwnerID` and `Service.Grants` hold **corp-ui user IDs** as
+  stringified uints (e.g. `"42"`). Old UUIDs from pre-fork data will not
+  match any current identity — that's intentional, services need
+  re-owning after migration.
 - **public** services — any authenticated identity can edit; system tokens always pass.
 - **private** services — only `OwnerID`, admins, or users in `Grants` can edit.
 - All services are readable & discoverable regardless of visibility.
 - Grants management is stricter than edit: only owner or admin (see `canManageGrants`).
+
+### corp-ui-specific landmines
+
+- **`CORP_API_KEY` never leaves the backend.** The login form posts to
+  our `/v1/auth/login`; we attach the API key server-side. Don't pass it
+  through to the browser even "for convenience". The grants editor's
+  user-search endpoint (`/v1/corp/users/search`) is admin-gated for the
+  same reason — it would otherwise reveal corp-ui users to any
+  authenticated discovery user.
+- **Iframe vs cookie cohabitation.** Both can be present at the same
+  time (cookie session + iframe Bearer). The resolver prefers the
+  cookie because it carries our snapshot; the bearer is checked only
+  when no cookie is present. The UI sets the Bearer **only** in iframe
+  mode (`lib/corp.ts` + `lib/api.ts:setBearerToken`) so a standalone
+  tab never accidentally falls through to the iframe path.
+- **Login rate limit lives in the module.** corp-ui's verify-password
+  does not lock out per-service; our `loginLimiter` (10/sec, burst 5,
+  per-IP) is the only brake. Don't remove it. Failed logins also sleep
+  150 ms to flatten timing oracles.
+- **`/v1/auth/login` does not return a cookie token in JSON.** Only the
+  `Set-Cookie` header. Don't try to bridge it to the iframe — iframe
+  mode never uses the cookie (third-party cookies in iframes are
+  unreliable in modern browsers).
 
 ### Tags
 

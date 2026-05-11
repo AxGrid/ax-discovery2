@@ -8,3 +8,16 @@ ui/dist/index.html
 ui/web/node_modules/
 ui/web/dist/
 .DS_Store
+
+# Kamal: real secrets must never be committed.
+# (Note: .kamal/hooks/ IS committed — those are deploy automation, not secrets.)
+/.kamal/secrets
+/.kamal/secrets.development
+/.kamal/secrets.production
+
+# Vendored deps. Regenerate locally with `make vendor` before deploying
+# (or run `kamal build` which depends on it).
+/vendor/
+
+# Local Unsible state (not used; we deploy via Kamal).
+/unsible.yaml

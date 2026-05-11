@@ -17,6 +17,7 @@ import (
 	"github.com/gorilla/websocket"
 	"golang.org/x/crypto/acme"
 	"golang.org/x/crypto/acme/autocert"
+	"golang.org/x/time/rate"
 
 	"github.com/axgrid/discovery2/internal/auth"
 	"github.com/axgrid/discovery2/internal/cluster"
@@ -29,6 +30,11 @@ type Config struct {
 	Listen string
 	Logger *slog.Logger
 	UI     fs.FS
+
+	// Corp configures the corp-ui SSO integration. Without it, only static
+	// service tokens (Bearer / X-API-Token) and anonymous reads work — there's
+	// no way for a human to log in.
+	Corp auth.CorpConfig
 
 	// TLS turns on automatic Let's Encrypt certificates via x/crypto/autocert.
 	// When Enable is true, Listen is ignored; the server runs on TLS.Listen
@@ -59,14 +65,15 @@ type TLSConfig struct {
 }
 
 type Server struct {
-	cfg      Config
-	log      *slog.Logger
-	store    *store.Store
-	auth     *auth.Authenticator
-	resolver *auth.Resolver
-	cluster  *cluster.Cluster
-	checker  *health.Checker
-	hub      *Hub
+	cfg        Config
+	log        *slog.Logger
+	store      *store.Store
+	auth       *auth.Authenticator
+	resolver   *auth.Resolver
+	cluster    *cluster.Cluster
+	checker    *health.Checker
+	hub        *Hub
+	loginRates *loginLimiter
 
 	srv *http.Server
 }
@@ -77,15 +84,40 @@ func New(cfg Config, s *store.Store, a *auth.Authenticator, c *cluster.Cluster, 
 		cfg.Logger = slog.Default()
 	}
 	return &Server{
-		cfg:      cfg,
-		log:      cfg.Logger,
-		store:    s,
-		auth:     a,
-		resolver: auth.NewResolver(s, a),
-		cluster:  c,
-		checker:  hc,
-		hub:      NewHub(s),
+		cfg:        cfg,
+		log:        cfg.Logger,
+		store:      s,
+		auth:       a,
+		resolver:   auth.NewResolver(s, a, cfg.Corp),
+		cluster:    c,
+		checker:    hc,
+		hub:        NewHub(s),
+		loginRates: newRateLimiter(),
 	}
+}
+
+// loginLimiter throttles /v1/auth/login attempts per remote IP. corp-ui's
+// verify-password doesn't lock out per-service brute force — that's our
+// job. The limit is intentionally generous (10/sec, burst 5) since legit
+// reloads after an expired session look bursty.
+type loginLimiter struct {
+	mu  sync.Mutex
+	lim map[string]*rate.Limiter
+}
+
+func newRateLimiter() *loginLimiter {
+	return &loginLimiter{lim: map[string]*rate.Limiter{}}
+}
+
+func (l *loginLimiter) allow(key string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	lim, ok := l.lim[key]
+	if !ok {
+		lim = rate.NewLimiter(rate.Limit(10), 5)
+		l.lim[key] = lim
+	}
+	return lim.Allow()
 }
 
 func (s *Server) Run(ctx context.Context) error {
@@ -93,14 +125,24 @@ func (s *Server) Run(ctx context.Context) error {
 	go s.hub.Run(stop)
 	defer close(stop)
 
-	mux := http.NewServeMux()
-	s.routes(mux)
-	handler := withCORS(withLogging(s.log, mux))
+	handler := s.Handler()
 
 	if s.cfg.TLS.Enable {
 		return s.runTLS(ctx, handler)
 	}
 	return s.runHTTP(ctx, handler)
+}
+
+// Handler returns the fully wired API + UI handler. Used by both the
+// built-in HTTP/HTTPS listeners and external integrations (e.g. ax-router2
+// in handler mode, which serves the same routes via a multiplexed
+// connection to a public router). Safe to call multiple times — each
+// call returns a freshly-wrapped chain; the underlying mutable state
+// (store, hub, cluster) is shared.
+func (s *Server) Handler() http.Handler {
+	mux := http.NewServeMux()
+	s.routes(mux)
+	return withCORS(withLogging(s.log, mux))
 }
 
 func (s *Server) runHTTP(ctx context.Context, handler http.Handler) error {
@@ -249,11 +291,8 @@ func (s *Server) routes(mux *http.ServeMux) {
 	api.HandleFunc("GET /v1/health", s.healthz)
 	api.HandleFunc("GET /v1/watch", s.watch)
 
-	// Users (admin)
-	api.HandleFunc("GET /v1/users", s.listUsers)
-	api.HandleFunc("POST /v1/users", s.createUser)
-	api.HandleFunc("PUT /v1/users/{id}", s.updateUser)
-	api.HandleFunc("DELETE /v1/users/{id}", s.deleteUser)
+	// Users (admin) — proxied to corp-ui for autocomplete in grants editor.
+	api.HandleFunc("GET /v1/corp/users/search", s.searchCorpUsers)
 
 	// Audit (admin)
 	api.HandleFunc("GET /v1/audit", s.listAudit)

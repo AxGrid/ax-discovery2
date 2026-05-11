@@ -5,7 +5,6 @@ import ServiceDetail from "./pages/ServiceDetail";
 import Cluster from "./pages/Cluster";
 import About from "./pages/About";
 import Login from "./pages/Login";
-import Users from "./pages/Users";
 import Audit from "./pages/Audit";
 import { useAuth } from "./lib/auth";
 
@@ -36,7 +35,6 @@ export default function App() {
           <Route index element={<Services />} />
           <Route path="/services/:name" element={<ServiceDetail />} />
           <Route path="/cluster" element={<Cluster />} />
-          <Route path="/users" element={<RequireAdmin><Users /></RequireAdmin>} />
           <Route path="/audit" element={<RequireAdmin><Audit /></RequireAdmin>} />
           <Route path="/about" element={<About />} />
         </Route>

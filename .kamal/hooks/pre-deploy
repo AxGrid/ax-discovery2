@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+#
+# Kamal pre-deploy hook. Runs locally on the operator's machine right
+# before any container changes, on every `kamal deploy` / `kamal setup`.
+#
+# Why we need it: discovery's container runs as uid 10001 (the
+# `discovery` user from the Dockerfile), but Docker bind-mounts inherit
+# the *host* directory's owner. When /srv/ax-discovery2/data is created
+# by root with default 0755, uid 10001 can read but can't write — bbolt
+# crashes with "open bbolt: permission denied" and kamal-proxy times out
+# the healthcheck.
+#
+# This hook idempotently fixes the ownership before each deploy.
+# Removing/disabling it is safe only if you've taken over the chown some
+# other way (e.g. a config-management tool seeds the directory).
+
+set -euo pipefail
+
+hosts="${KAMAL_HOSTS:-}"
+if [ -z "$hosts" ]; then
+  echo "pre-deploy: KAMAL_HOSTS is empty, nothing to do" >&2
+  exit 0
+fi
+
+# We always SSH as root for this project (see config/deploy.yml ssh.user).
+# If that ever changes, tweak the user below.
+ssh_user="root"
+data_dir="/srv/ax-discovery2/data"
+target_uid=10001
+target_gid=10001
+
+IFS=',' read -ra host_list <<< "$hosts"
+for h in "${host_list[@]}"; do
+  host="${h// /}"
+  [ -z "$host" ] && continue
+  echo "pre-deploy: ensuring $data_dir on $ssh_user@$host is $target_uid:$target_gid"
+  ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$ssh_user@$host" \
+    "mkdir -p '$data_dir' && chown -R $target_uid:$target_gid '$data_dir' && chmod 0750 '$data_dir'"
+done

@@ -232,32 +232,23 @@ const (
 	EventInstanceUpserted = "instance.upserted"
 	EventInstanceDeleted  = "instance.deleted"
 	EventInstanceStatus   = "instance.status"
-	EventUserUpserted     = "user.upserted"
-	EventUserDeleted      = "user.deleted"
 )
 
-// User is a UI/admin account. Service-to-service traffic uses static tokens
-// and does not need a User row.
-//
-// PasswordHash MUST be persisted (bbolt rows are JSON-encoded), but it must
-// never reach the wire. Handlers explicitly clear it before writing responses;
-// see redactedUser in store/users.go and the explicit zeroing in users_handlers.go.
-type User struct {
-	ID           string    `json:"id"`
-	Username     string    `json:"username"`
-	DisplayName  string    `json:"displayName,omitempty"`
-	IsAdmin      bool      `json:"isAdmin"`
-	PasswordHash string    `json:"passwordHash,omitempty"`
-	CreatedAt    time.Time `json:"createdAt"`
-	UpdatedAt    time.Time `json:"updatedAt"`
-}
-
-// Session ties a cookie token to a user with an expiry.
+// Session ties a cookie token to a corp-ui user. The user record itself
+// lives in corp-ui — we only cache the bits the UI needs to render and the
+// permissions snapshot that gates discovery actions. Expiry is short
+// (default 15 min) so stale corp-ui group changes propagate on next login.
 type Session struct {
-	Token     string    `json:"-"`
-	UserID    string    `json:"userId"`
-	CreatedAt time.Time `json:"createdAt"`
-	ExpiresAt time.Time `json:"expiresAt"`
+	Token       string            `json:"-"`
+	UserID      string            `json:"userId"` // corp-ui user_id stringified
+	Email       string            `json:"email,omitempty"`
+	Username    string            `json:"username,omitempty"`
+	DisplayName string            `json:"displayName,omitempty"`
+	IsAdmin     bool              `json:"isAdmin,omitempty"`
+	AccountID   string            `json:"accountId,omitempty"`
+	Perms       map[string]string `json:"perms,omitempty"` // snapshot from corp-ui verify-password
+	CreatedAt   time.Time         `json:"createdAt"`
+	ExpiresAt   time.Time         `json:"expiresAt"`
 }
 
 // AuditEntry records who did what.
@@ -281,11 +272,9 @@ const (
 	AuditInstanceDeleted  = "instance.deleted"
 	AuditGrantAdded       = "service.grant.added"
 	AuditGrantRemoved     = "service.grant.removed"
-	AuditUserCreated      = "user.created"
-	AuditUserUpdated      = "user.updated"
-	AuditUserDeleted      = "user.deleted"
 	AuditUserLogin        = "user.login"
 	AuditUserLogout       = "user.logout"
+	AuditLoginFailed      = "user.login.failed"
 )
 
 // Event is a change notification.

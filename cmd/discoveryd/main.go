@@ -13,13 +13,13 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/google/uuid"
+	axrouter "github.com/axgrid/ax-router2/client"
+	"github.com/corp-ui/corp-ui/sdk/go/corp"
 	"github.com/joho/godotenv"
 
 	"github.com/axgrid/discovery2/internal/auth"
 	"github.com/axgrid/discovery2/internal/cluster"
 	"github.com/axgrid/discovery2/internal/health"
-	"github.com/axgrid/discovery2/internal/model"
 	"github.com/axgrid/discovery2/internal/server"
 	"github.com/axgrid/discovery2/internal/store"
 	uiembed "github.com/axgrid/discovery2/ui"
@@ -44,9 +44,18 @@ func main() {
 		adminToks   = flag.String("admin-tokens", envOr("DISCOVERY_ADMIN_TOKENS", ""), "comma-separated admin tokens")
 		anon        = flag.Bool("allow-anonymous-read", envBoolOr("DISCOVERY_ALLOW_ANON_READ", true), "allow read without token")
 		clusterTok  = flag.String("cluster-token", envOr("DISCOVERY_CLUSTER_TOKEN", ""), "shared token for cluster sync")
-		logLevel     = flag.String("log", envOr("DISCOVERY_LOG", "info"), "log level: debug|info|warn|error")
-		defaultUser  = flag.String("default-admin-user", envOr("DISCOVERY_DEFAULT_ADMIN_USER", "admin"), "username for the bootstrap admin (only created if no users exist)")
-		defaultPass  = flag.String("default-admin-password", envOr("DISCOVERY_DEFAULT_ADMIN_PASSWORD", "admin"), "password for the bootstrap admin")
+		logLevel    = flag.String("log", envOr("DISCOVERY_LOG", "info"), "log level: debug|info|warn|error")
+
+		// corp-ui SSO
+		corpURL     = flag.String("corp-url", envOr("CORP_URL", ""), "base URL of the corp-ui console (https://console.example.com) — required for cookie-session login and iframe-token validation")
+		corpAPIKey  = flag.String("corp-api-key", envOr("CORP_API_KEY", ""), "per-service API key issued by corp-ui (used for verify-password and user search)")
+		corpSlug    = flag.String("corp-slug", envOr("CORP_SERVICE_SLUG", "discovery"), "slug under which this discovery instance is registered in corp-ui")
+		corpPermKey = flag.String("corp-perm-key", envOr("CORP_PERM_KEY", "discovery"), "permission key in corp-ui whose r/w/a controls discovery access")
+
+		// ax-router2 reverse-router registration (optional)
+		axRouterHost  = flag.String("ax-router-host", envOr("AX_ROUTER_HOST", ""), "host of the ax-router2 reverse router (empty = no registration)")
+		axRouterToken = flag.String("ax-router-token", envOr("AX_ROUTER_TOKEN", ""), "shared token for ax-router2 registration")
+		axRouterName  = flag.String("ax-router-name", envOr("AX_ROUTER_NAME", "discovery"), "service name to advertise on ax-router2")
 
 		// ACME / Let's Encrypt
 		acmeEnable   = flag.Bool("acme", envBoolOr("DISCOVERY_ACME_ENABLE", false), "enable automatic HTTPS via Let's Encrypt (requires public DNS + ports 80/443)")
@@ -68,9 +77,22 @@ func main() {
 	}
 	defer st.Close()
 
-	if err := bootstrapAdmin(st, *defaultUser, *defaultPass, log); err != nil {
-		log.Error("bootstrap admin", "err", err)
-		os.Exit(1)
+	// Build the corp-ui client. Without a URL we run with static-token-only
+	// auth — useful for tests and air-gapped clusters where corp-ui isn't
+	// available — but UI login is impossible in that mode.
+	var corpClient *corp.Client
+	if strings.TrimSpace(*corpURL) != "" {
+		corpClient = corp.New(*corpURL)
+		if strings.TrimSpace(*corpAPIKey) != "" {
+			corpClient = corpClient.WithAPIKey(*corpAPIKey)
+		}
+		log.Info("corp-ui sso configured",
+			"corp", *corpURL,
+			"slug", *corpSlug,
+			"permKey", *corpPermKey,
+			"hasApiKey", *corpAPIKey != "")
+	} else {
+		log.Warn("CORP_URL not set — UI login disabled (static tokens only)")
 	}
 
 	authn := auth.New(auth.Config{
@@ -118,6 +140,11 @@ func main() {
 		Listen: *listen,
 		Logger: log,
 		UI:     uiFS,
+		Corp: auth.CorpConfig{
+			Client:      corpClient,
+			ServiceSlug: *corpSlug,
+			PermKey:     *corpPermKey,
+		},
 		TLS: server.TLSConfig{
 			Enable:             *acmeEnable,
 			Listen:             *httpsListen,
@@ -140,6 +167,32 @@ func main() {
 			cancel()
 		}
 	}()
+
+	// ax-router2 registration (optional). Same handler tree the local
+	// listener serves is muxed over a single outbound TCP connection to
+	// the router — no extra goroutines per request, no exposed port.
+	if strings.TrimSpace(*axRouterHost) != "" {
+		rc, err := axrouter.NewHandler(axrouter.Config{
+			ServerAddr: *axRouterHost,
+			Token:      *axRouterToken,
+			Service:    *axRouterName,
+		}, srv.Handler())
+		if err != nil {
+			log.Error("ax-router init", "err", err)
+		} else {
+			log.Info("ax-router connecting",
+				"host", *axRouterHost,
+				"name", *axRouterName,
+				"hasToken", *axRouterToken != "")
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if err := rc.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+					log.Error("ax-router", "err", err)
+				}
+			}()
+		}
+	}
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
@@ -242,36 +295,3 @@ func loadDotEnv() {
 	}
 }
 
-// bootstrapAdmin creates the default admin only if no users exist yet. This
-// makes a freshly-deployed instance immediately usable without a separate
-// init step, while staying out of the way on subsequent boots.
-func bootstrapAdmin(st *store.Store, username, password string, log *slog.Logger) error {
-	n, err := st.CountUsers()
-	if err != nil {
-		return err
-	}
-	if n > 0 {
-		return nil
-	}
-	username = strings.TrimSpace(username)
-	if username == "" || password == "" {
-		log.Warn("no users in store and no default admin configured — UI login will be impossible until a user is created")
-		return nil
-	}
-	hash, err := auth.HashPassword(password)
-	if err != nil {
-		return err
-	}
-	u := &model.User{
-		ID:           uuid.NewString(),
-		Username:     username,
-		DisplayName:  "Administrator",
-		IsAdmin:      true,
-		PasswordHash: hash,
-	}
-	if err := st.PutUser(u); err != nil {
-		return err
-	}
-	log.Info("bootstrapped default admin", "username", username)
-	return nil
-}

@@ -5,9 +5,9 @@ import { Logo } from "@/components/Logo";
 import { Button, Card, CardContent, Input, Label, ThemeToggle } from "@/components/ui";
 
 export default function Login() {
-  const { me, login } = useAuth();
+  const { me, login, mode } = useAuth();
   const loc = useLocation();
-  const [username, setUsername] = useState("");
+  const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -17,11 +17,32 @@ export default function Login() {
     return <Navigate to={redirect} replace />;
   }
 
+  // In iframe mode the parent handles auth — if we land on /login here
+  // it means the iframe handshake failed. Show a clear message instead
+  // of a working form, because submitting it would mint a cookie that
+  // the iframe still wouldn't use.
+  if (mode === "iframe") {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-bg p-6">
+        <Card className="w-full max-w-sm">
+          <CardContent className="pt-6 text-center space-y-2">
+            <Logo size={48} />
+            <div className="text-lg font-semibold">Sign in via corp-ui</div>
+            <div className="text-sm text-fg-muted">
+              The corp-ui host hasn't issued a token. Reload the page from corp-ui,
+              or sign in to corp-ui first and try again.
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setSubmitting(true); setError(null);
     try {
-      await login(username, password);
+      await login(identifier, password);
     } catch (err: any) {
       setError(err.message || "Login failed");
     } finally {
@@ -39,7 +60,7 @@ export default function Login() {
               <Logo size={48} />
               <div className="text-center">
                 <div className="text-xl font-semibold tracking-tight">discovery</div>
-                <div className="text-sm text-fg-muted mt-1">Sign in to continue</div>
+                <div className="text-sm text-fg-muted mt-1">Sign in with your corp-ui account</div>
               </div>
             </div>
             {error && (
@@ -47,9 +68,9 @@ export default function Login() {
             )}
             <div className="space-y-3">
               <div>
-                <Label htmlFor="username">Username</Label>
-                <Input id="username" value={username}
-                  onChange={e => setUsername(e.target.value)}
+                <Label htmlFor="identifier">Email or username</Label>
+                <Input id="identifier" value={identifier}
+                  onChange={e => setIdentifier(e.target.value)}
                   autoComplete="username" autoFocus required />
               </div>
               <div>
@@ -63,9 +84,7 @@ export default function Login() {
               {submitting ? "Signing in…" : "Sign in"}
             </Button>
             <div className="mt-4 text-xs text-fg-muted text-center">
-              Default admin in <code className="font-mono">.env</code>:
-              {" "}<code className="font-mono">DISCOVERY_DEFAULT_ADMIN_USER</code> /
-              {" "}<code className="font-mono">DISCOVERY_DEFAULT_ADMIN_PASSWORD</code>
+              Users are managed in corp-ui. Forgot your password? Reset it there.
             </div>
           </form>
         </CardContent>

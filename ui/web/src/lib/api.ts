@@ -72,23 +72,35 @@ export type ServiceInput = {
   grants?: string[];
 };
 
-export interface User {
+export interface CorpUserHit {
   id: string;
-  username: string;
+  email?: string;
+  username?: string;
   displayName?: string;
-  isAdmin: boolean;
-  createdAt: string;
-  updatedAt: string;
+  accountId?: string;
 }
 
 export interface Me {
   authenticated: boolean;
   userId?: string;
   username?: string;
+  email?: string;
   displayName?: string;
+  accountId?: string;
   isAdmin?: boolean;
   system?: boolean;
   role: string;
+  perms?: Record<string, string>;
+  iframe?: boolean;
+}
+
+// Permission-check helper mirroring the backend's RoleFromPerms + Can.
+export function canPerm(me: Me | null, key: string, level: "r" | "w" | "a"): boolean {
+  if (!me?.authenticated) return false;
+  if (me.isAdmin) return true;
+  const p = me.perms || {};
+  const has = (v?: string) => !!v && v.toLowerCase().includes(level);
+  return has(p[key]) || has(p["*"]);
 }
 
 export interface ProbeResult {
@@ -135,11 +147,19 @@ export class ApiError extends Error {
   }
 }
 
+// bearerToken is set by lib/auth.tsx after CorpSDK.ready() resolves in
+// iframe mode. Standalone mode leaves it null and relies on the cookie.
+let bearerToken: string | null = null;
+export function setBearerToken(tok: string | null) { bearerToken = tok; }
+export function getBearerToken(): string | null { return bearerToken; }
+
 async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (bearerToken) headers.Authorization = `Bearer ${bearerToken}`;
   const res = await fetch(path, {
     method,
     credentials: "include",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) {
@@ -162,9 +182,11 @@ export interface TagCount {
 export const api = {
   // auth
   me: () => req<Me>("GET", "/v1/auth/me"),
-  login: (username: string, password: string) =>
-    req<{ user: User }>("POST", "/v1/auth/login", { username, password }),
+  login: (identifier: string, password: string) =>
+    req<Me>("POST", "/v1/auth/login", { identifier, password }),
   logout: () => req<void>("POST", "/v1/auth/logout"),
+  searchCorpUsers: (q: string) =>
+    req<CorpUserHit[]>("GET", `/v1/corp/users/search?q=${encodeURIComponent(q)}`),
 
   // services
   listServices: (tag?: string) =>
@@ -192,14 +214,6 @@ export const api = {
     req<void>("DELETE", `/v1/services/${encodeURIComponent(service)}/instances/${encodeURIComponent(id)}`),
   checkInstance: (service: string, id: string) =>
     req<CheckResponse>("POST", `/v1/services/${encodeURIComponent(service)}/instances/${encodeURIComponent(id)}/check`),
-
-  // users
-  listUsers: () => req<User[]>("GET", "/v1/users"),
-  createUser: (u: { username: string; displayName?: string; password: string; isAdmin: boolean }) =>
-    req<User>("POST", "/v1/users", u),
-  updateUser: (id: string, u: Partial<{ username: string; displayName: string; password: string; isAdmin: boolean }>) =>
-    req<User>("PUT", `/v1/users/${encodeURIComponent(id)}`, u),
-  deleteUser: (id: string) => req<void>("DELETE", `/v1/users/${encodeURIComponent(id)}`),
 
   // audit
   listAudit: (limit = 200, service?: string) =>

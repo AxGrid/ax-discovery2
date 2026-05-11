@@ -5,10 +5,10 @@ import { useAuth } from "@/lib/auth";
 import {
   Avatar, AvatarFallback, Button, Drawer, DrawerContent, DrawerTrigger, ThemeToggle,
 } from "@/components/ui";
-import { FileText, Info, Layers, LogOut, Menu, Network, Users as UsersIcon } from "lucide-react";
+import { FileText, Info, Layers, LogOut, Menu, Network } from "lucide-react";
 
 export function AppShell() {
-  const { me, logout } = useAuth();
+  const { me, logout, mode } = useAuth();
   const loc = useLocation();
   const [drawerOpen, setDrawerOpen] = useState(false);
 
@@ -19,7 +19,7 @@ export function AppShell() {
     <div className="h-screen flex bg-bg text-fg">
       {/* Desktop sidebar */}
       <aside className="hidden md:flex w-64 shrink-0 flex-col border-r border-border bg-bg-elevated">
-        <SidebarBody me={me} logout={logout} />
+        <SidebarBody me={me} logout={logout} mode={mode} />
       </aside>
 
       {/* Mobile top bar with hamburger trigger */}
@@ -35,7 +35,7 @@ export function AppShell() {
           <ThemeToggle />
         </div>
         <DrawerContent side="left" className="w-72 p-0">
-          <SidebarBody me={me} logout={logout} />
+          <SidebarBody me={me} logout={logout} mode={mode} />
         </DrawerContent>
       </Drawer>
 
@@ -48,8 +48,16 @@ export function AppShell() {
   );
 }
 
-function SidebarBody({ me, logout }: { me: ReturnType<typeof useAuth>["me"]; logout: () => void }) {
-  const initial = (me?.displayName || me?.username || "?").trim().charAt(0).toUpperCase();
+function SidebarBody({ me, logout, mode }: {
+  me: ReturnType<typeof useAuth>["me"];
+  logout: () => void;
+  mode: ReturnType<typeof useAuth>["mode"];
+}) {
+  const initial = (me?.displayName || me?.email || me?.username || "?").trim().charAt(0).toUpperCase();
+  // In iframe mode the host owns the sign-out lifecycle — discovery's
+  // local "Sign out" only clears our cached token, not the corp-ui
+  // session — so we hide it to avoid the confusing partial-logout state.
+  const showLogout = mode === "standalone";
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center gap-3 h-16 px-5 border-b border-border">
@@ -62,7 +70,6 @@ function SidebarBody({ me, logout }: { me: ReturnType<typeof useAuth>["me"]; log
         {me?.isAdmin && (
           <>
             <div className="pt-3 pb-1 px-3 text-[11px] uppercase tracking-wider text-fg-subtle">Admin</div>
-            <NavItem to="/users" icon={<UsersIcon className="size-4" />}>Users</NavItem>
             <NavItem to="/audit" icon={<FileText className="size-4" />}>Audit log</NavItem>
           </>
         )}
@@ -75,16 +82,18 @@ function SidebarBody({ me, logout }: { me: ReturnType<typeof useAuth>["me"]; log
             <AvatarFallback className="bg-accent text-accent-fg font-semibold">{initial}</AvatarFallback>
           </Avatar>
           <div className="min-w-0 flex-1">
-            <div className="text-sm font-medium truncate">{me?.displayName || me?.username}</div>
+            <div className="text-sm font-medium truncate">{me?.displayName || me?.email || me?.username}</div>
             <div className="text-xs text-fg-muted truncate">
-              {me?.isAdmin ? "Administrator" : (me?.username ?? "anonymous")}
+              {me?.isAdmin ? "Administrator" : (me?.email ?? me?.username ?? "anonymous")}
             </div>
           </div>
           <ThemeToggle />
         </div>
-        <Button variant="secondary" className="w-full" onClick={logout} leftIcon={<LogOut className="size-4" />}>
-          Sign out
-        </Button>
+        {showLogout && (
+          <Button variant="secondary" className="w-full" onClick={logout} leftIcon={<LogOut className="size-4" />}>
+            Sign out
+          </Button>
+        )}
       </div>
     </div>
   );

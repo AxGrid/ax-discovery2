@@ -1,0 +1,104 @@
+# Kamal 2 deploy config for discovery2 (corp-module fork).
+#
+# First-time bootstrap on a fresh host:
+#
+#   1. Make sure DNS A-record for d.axgrid.com points at the box.
+#   2. Open ports 80 (ACME http-01) and 443 (HTTPS) in the firewall.
+#   3. Install Docker on the host (Kamal can do this — see `kamal server bootstrap`).
+#   4. Fill in real values in .kamal/secrets (copy from .kamal/secrets.example).
+#   5. Run, from this repo on your laptop:
+#
+#        make vendor                  # `go mod vendor` so Docker build sees corp-ui SDK
+#        kamal proxy boot --ssl-email info@axgrid.com   # one-time, sets LE contact
+#        kamal setup                                    # builds image, pushes, deploys, registers proxy
+#
+#   After that, day-to-day deploys are just:
+#        make kamal-deploy           # vendor + kamal deploy
+#
+# Logs / shell / status:
+#        kamal app logs -f
+#        kamal app exec -it sh
+#        kamal app details
+
+service: ax-discovery2
+
+# Image name relative to registry.server below — full path becomes
+# registry.axgrid.com/services/ax-discovery2:<tag>. Tag is set per
+# deploy by Kamal (defaults to short git SHA).
+image: services/ax-discovery2
+
+servers:
+  web:
+    hosts:
+      - d.axgrid.com
+    # Each host that hits the web role serves HTTP traffic via kamal-proxy.
+    # No labels needed for a single-host single-role setup.
+
+# kamal-proxy fronts the container on :443 with Let's Encrypt certs.
+# It listens on :80 only for ACME http-01 challenges + an HTTP→HTTPS
+# redirect, so the firewall must allow both 80 and 443 from the public
+# internet (LE prober needs 80, browsers need 443).
+proxy:
+  ssl: true
+  host: d.axgrid.com
+  app_port: 8500
+  # Kamal hits this endpoint to decide when the new container is "ready"
+  # during a rolling deploy. /v1/health is unauthenticated by design.
+  healthcheck:
+    path: /v1/health
+    interval: 3
+    timeout: 5
+
+# Private registry. Username goes in plaintext; password is sourced
+# from .kamal/secrets and never committed. `KAMAL_REGISTRY_PASSWORD`
+# is the env var name Kamal looks up at deploy time.
+registry:
+  server: registry.axgrid.com
+  username: admin
+  password:
+    - KAMAL_REGISTRY_PASSWORD
+
+ssh:
+  user: root
+
+builder:
+  # Force amd64 — Apple-silicon laptops would otherwise produce arm64
+  # images that don't run on typical VPS hosts. If the target host is
+  # arm64 (Hetzner CAX, AWS Graviton, …), change this to arm64.
+  arch: amd64
+  context: .
+  dockerfile: Dockerfile
+
+# Environment baked into the container at runtime. `clear:` is plain
+# strings (visible in `kamal app exec env`); `secret:` is sourced from
+# .kamal/secrets and never logged.
+env:
+  clear:
+    DISCOVERY_LISTEN: ":8500"
+    DISCOVERY_DB: "/data/discovery.db"
+    DISCOVERY_NODE_ID: "d-axgrid-com"
+    DISCOVERY_ALLOW_ANON_READ: "false"
+    DISCOVERY_LOG: "info"
+    # corp-ui SSO — users live in corp-ui, no local accounts.
+    CORP_URL: "https://ui.r.axgrid.com"
+    CORP_SERVICE_SLUG: "discovery"
+    CORP_PERM_KEY: "discovery"
+    # ACME inside discovery is OFF because kamal-proxy handles TLS.
+    DISCOVERY_ACME_ENABLE: "false"
+  secret:
+    - CORP_API_KEY
+    - DISCOVERY_ADMIN_TOKENS
+
+# Persistent bbolt file. Host bind-mount so the data survives container
+# replacement during `kamal deploy`. Mode 0750 enforced by the user
+# created in the Dockerfile (uid 10001).
+volumes:
+  - "/srv/ax-discovery2/data:/data"
+
+# Convenience aliases — invoke as `kamal logs`, `kamal shell`, etc.
+# Note: don't name aliases the same as built-in commands (e.g. `rollback`,
+# `deploy`, `setup`) — Kamal rejects the config at parse time.
+aliases:
+  logs: app logs -f
+  shell: app exec -it sh
+  status: app details

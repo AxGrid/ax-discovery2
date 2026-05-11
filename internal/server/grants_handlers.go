@@ -37,10 +37,9 @@ func (s *Server) addGrant(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, errors.New("userId required"))
 		return
 	}
-	if _, err := s.store.GetUser(req.UserID); err != nil {
-		writeErr(w, http.StatusBadRequest, errors.New("unknown user"))
-		return
-	}
+	// The userId is a corp-ui user id (stringified uint). We don't validate
+	// against corp here — if the operator misspells it the grant simply
+	// never matches at CanEditService check time, which is harmless.
 	if !slices.Contains(svc.Grants, req.UserID) {
 		svc.Grants = append(svc.Grants, req.UserID)
 		if err := s.store.PutService(svc); err != nil {

@@ -1,0 +1,33 @@
+# Things that must NOT enter the Docker build context.
+# vendor/ + ui/web are intentionally allowed in.
+
+# Build artefacts — regenerated inside the image.
+/bin/
+/discoveryd
+/dist/
+ui/dist/
+ui/web/dist/
+ui/web/node_modules/
+
+# Local state & secrets.
+/certs/
+*.db
+.env
+.env.*
+.kamal/secrets
+.kamal/secrets.*
+
+# VCS, IDE, OS.
+.git
+.gitignore
+.gitattributes
+.idea/
+.vscode/
+.DS_Store
+*.swp
+*.swo
+
+# Tooling we don't use in-image.
+/unsible.yaml
+README.md
+CLAUDE.md
