@@ -2,7 +2,7 @@
         build-linux build-linux-amd64 build-linux-arm64 build-all \
         test clean \
         vendor docker-build docker-run \
-        kamal-setup kamal-deploy kamal-redeploy kamal-logs kamal-status kamal-ensure-volume \
+        kamal-setup kamal-deploy kamal-redeploy kamal-logs kamal-status \
         secrets-edit secrets-encrypt secrets-decrypt secrets-rekey
 
 # Strip symbols + DWARF for cross-built Linux binaries. ~30% smaller, no
@@ -113,30 +113,37 @@ docker-run: docker-build
 # and `kamal proxy boot --ssl-email=info@axgrid.com` to have been run
 # beforehand (see config/deploy.yml header).
 #
-# Also pre-creates the bbolt volume directory on the host with uid:gid
-# 10001:10001 (the `discovery` user from the Dockerfile). Without this,
-# the first deploy crash-loops with "open bbolt: permission denied"
-# because Docker bind-mounts inherit the host directory's owner, not
-# the image's.
-kamal-setup: vendor .kamal/secrets kamal-ensure-volume
+# The bbolt volume directory is chowned to uid 10001 (the `discovery`
+# user from the Dockerfile) by `.kamal/hooks/pre-deploy`, which runs
+# automatically on every `kamal setup`/`kamal deploy`. Without this,
+# the container crash-loops with "open bbolt: permission denied"
+# because Docker bind-mounts inherit the host directory's owner.
+kamal-setup: vendor .kamal/secrets
 	kamal setup
 
-kamal-ensure-volume:
-	@host=$$(awk '/^servers:/,/^[a-z]+:/' config/deploy.yml | awk '/-[[:space:]]/{print $$2; exit}'); \
-	    user=$$(awk '/^ssh:/,/^[a-z]+:/' config/deploy.yml | awk '/user:/{print $$2; exit}'); \
-	    if [ -z "$$host" ] || [ -z "$$user" ]; then echo "could not detect host/user from deploy.yml"; exit 1; fi; \
-	    echo "ensuring /srv/ax-discovery2/data on $$user@$$host belongs to 10001:10001"; \
-	    ssh $$user@$$host 'mkdir -p /srv/ax-discovery2/data && chown 10001:10001 /srv/ax-discovery2/data && chmod 0750 /srv/ax-discovery2/data'
-
-# Day-to-day deploys. Rebuilds the image (Kamal tags with the current
-# git SHA), pushes to the private registry, rolls the container on the
-# host, and kamal-proxy switches traffic only after /v1/health passes.
+# Day-to-day deploys. Two-step because bbolt is a single-writer store
+# (exclusive file lock); Kamal's default rolling deploy would start the
+# new container alongside the old, and the new one would fail to open
+# /data/discovery.db with "open bbolt: timeout".
 #
-# kamal-ensure-volume is idempotent and cheap (one SSH + chown). Keeping
-# it on every deploy means the bbolt directory's ownership is never the
-# reason a deploy fails — even if someone reboots the host with a fresh
-# /srv or adds a new server to deploy.yml.
-kamal-deploy: vendor .kamal/secrets kamal-ensure-volume
+# `-kamal app stop` releases the lock first (the leading `-` lets the
+# build proceed even if nothing was running, e.g. very first deploy).
+# Then `kamal deploy` does its usual build + push + boot — kamal-proxy
+# switches traffic when /v1/health returns 200.
+#
+# Total downtime per deploy: ~1-3 min (covers build + push + boot +
+# healthcheck). If the build is fully cached, the bottleneck shifts to
+# push+boot and you get closer to ~30s. We considered build-push-first /
+# stop / deploy-skip-push but `kamal build push` in Kamal 2 only pushes
+# an already-built image — it doesn't build — so the split-flow needs
+# `kamal build deliver` and tag invariance across both invocations,
+# which is fragile with `_uncommitted_<hash>` tags. Reliable > clever.
+#
+# Volume ownership is enforced by .kamal/hooks/pre-deploy on every
+# Kamal command — Kamal feeds the hook the actual host list via
+# $KAMAL_HOSTS, no YAML parsing needed.
+kamal-deploy: vendor .kamal/secrets
+	-kamal app stop
 	kamal deploy
 
 # Same image + same env, fresh container. Use after editing

@@ -291,6 +291,14 @@ What the Make targets do:
 - `kamal-deploy` depends on the two above plus the encrypted-secrets
   decrypt rule (`.kamal/secrets`), so a fresh clone deploys end-to-end
   with one command.
+- `kamal-deploy` does **`kamal app stop` → `kamal deploy`** instead of
+  plain `kamal deploy`. bbolt holds an exclusive file lock; Kamal's
+  default rolling restart would start the new container alongside the
+  old, and the new one would fail to open the DB with `open bbolt:
+  timeout`. Stopping first releases the lock, then the deploy builds,
+  pushes, and boots cleanly. Total downtime ~1–3 min (build+push+boot,
+  closer to 30 s with a hot Docker cache). Don't run plain `kamal
+  deploy` for this app — it will deadlock.
 
 `config/deploy.yml` highlights:
 

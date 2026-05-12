@@ -80,6 +80,13 @@ export interface CorpUserHit {
   accountId?: string;
 }
 
+export interface TokensResponse {
+  role: "none" | "read" | "write" | "admin";
+  read?: string[];
+  write?: string[];
+  admin?: string[];
+}
+
 export interface Me {
   authenticated: boolean;
   userId?: string;
@@ -187,6 +194,7 @@ export const api = {
   logout: () => req<void>("POST", "/v1/auth/logout"),
   searchCorpUsers: (q: string) =>
     req<CorpUserHit[]>("GET", `/v1/corp/users/search?q=${encodeURIComponent(q)}`),
+  tokens: () => req<TokensResponse>("GET", "/v1/tokens"),
 
   // services
   listServices: (tag?: string) =>

@@ -44,6 +44,26 @@ type Authenticator struct{ cfg Config }
 
 func New(cfg Config) *Authenticator { return &Authenticator{cfg: cfg} }
 
+// ReadTokens / WriteTokens / AdminTokens return defensive copies of the
+// configured token lists. Used by handlers that show tokens to the
+// caller, gated by role.
+func (a *Authenticator) ReadTokens() []string  { return cloneTokens(a.cfg.ReadTokens) }
+func (a *Authenticator) WriteTokens() []string { return cloneTokens(a.cfg.WriteTokens) }
+func (a *Authenticator) AdminTokens() []string { return cloneTokens(a.cfg.AdminTokens) }
+
+func cloneTokens(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(in))
+	for _, t := range in {
+		if t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
 type ctxKey struct{}
 
 // RoleFrom returns the role attached to ctx by the legacy Middleware

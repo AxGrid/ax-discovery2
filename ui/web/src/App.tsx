@@ -6,6 +6,7 @@ import Cluster from "./pages/Cluster";
 import About from "./pages/About";
 import Login from "./pages/Login";
 import Audit from "./pages/Audit";
+import Tokens from "./pages/Tokens";
 import { useAuth } from "./lib/auth";
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -35,6 +36,7 @@ export default function App() {
           <Route index element={<Services />} />
           <Route path="/services/:name" element={<ServiceDetail />} />
           <Route path="/cluster" element={<Cluster />} />
+          <Route path="/tokens" element={<Tokens />} />
           <Route path="/audit" element={<RequireAdmin><Audit /></RequireAdmin>} />
           <Route path="/about" element={<About />} />
         </Route>

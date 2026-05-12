@@ -77,6 +77,23 @@ export function detectCorpOrigin(): string | null {
 
 let sdkPromise: Promise<CorpReadyResult> | null = null;
 
+// injectCorpStyles pulls corp-ui.css from the host so our chrome (top
+// bar, badges, button hovers) inherits the same tokens — backgrounds,
+// borders, accent — as everything else the user sees in corp-ui. The
+// link is appended AFTER our static stylesheets so its tokens win where
+// they're defined; for tokens corp-ui doesn't ship, ax-styler keeps
+// providing them.
+//
+// Safe to call multiple times — guarded by a data attribute.
+function injectCorpStyles(origin: string) {
+  if (document.querySelector('link[data-corp-styles]')) return;
+  const link = document.createElement("link");
+  link.rel = "stylesheet";
+  link.href = `${origin}/design-kit/corp-ui.css`;
+  link.dataset.corpStyles = "1";
+  document.head.appendChild(link);
+}
+
 // loadCorpSDK injects the SDK <script> from the host and resolves once
 // CorpSDK.ready() returns. Memoised so repeated calls share one promise.
 //
@@ -91,6 +108,9 @@ export function loadCorpSDK(): Promise<CorpReadyResult> {
       reject(new Error("corp host origin not detectable from document.referrer"));
       return;
     }
+    // Fire-and-forget; CSS doesn't gate JS readiness. If corp-ui.css 404s
+    // we just keep ax-styler tokens — no error path matters here.
+    injectCorpStyles(origin);
     const existing = document.querySelector<HTMLScriptElement>(`script[data-corp-sdk]`);
     const onReady = async () => {
       if (!window.CorpSDK) {

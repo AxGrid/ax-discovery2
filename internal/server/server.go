@@ -294,6 +294,9 @@ func (s *Server) routes(mux *http.ServeMux) {
 	// Users (admin) — proxied to corp-ui for autocomplete in grants editor.
 	api.HandleFunc("GET /v1/corp/users/search", s.searchCorpUsers)
 
+	// Static service tokens, gated by caller's role.
+	api.HandleFunc("GET /v1/tokens", s.listTokens)
+
 	// Audit (admin)
 	api.HandleFunc("GET /v1/audit", s.listAudit)
 
