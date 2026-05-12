@@ -87,6 +87,8 @@ env:
     DISCOVERY_ACME_ENABLE: "false"
   secret:
     - CORP_API_KEY
+    - DISCOVERY_READ_TOKENS
+    - DISCOVERY_WRITE_TOKENS
     - DISCOVERY_ADMIN_TOKENS
 
 # Persistent bbolt file. Host bind-mount so the data survives container

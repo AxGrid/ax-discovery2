@@ -121,30 +121,35 @@ docker-run: docker-build
 kamal-setup: vendor .kamal/secrets
 	kamal setup
 
-# Day-to-day deploys. Two-step because bbolt is a single-writer store
-# (exclusive file lock); Kamal's default rolling deploy would start the
-# new container alongside the old, and the new one would fail to open
-# /data/discovery.db with "open bbolt: timeout".
+# Day-to-day deploys. Three-step to minimise downtime on a single-writer
+# bbolt store:
 #
-# `-kamal app stop` releases the lock first (the leading `-` lets the
-# build proceed even if nothing was running, e.g. very first deploy).
-# Then `kamal deploy` does its usual build + push + boot — kamal-proxy
-# switches traffic when /v1/health returns 200.
+#   1. `kamal build deliver` — builds the image AND pushes to the
+#      registry. Old container still serves, no downtime.
+#   2. `-kamal app stop` — stops the old container, releasing the bbolt
+#      exclusive flock. Downtime starts (the leading `-` makes a no-op
+#      on the very first deploy when nothing is running yet).
+#   3. `kamal deploy --skip-push` — pulls the image (cache-hit, was just
+#      pushed in step 1) and boots the new container. kamal-proxy
+#      switches traffic when /v1/health returns 200. Downtime ends.
 #
-# Total downtime per deploy: ~1-3 min (covers build + push + boot +
-# healthcheck). If the build is fully cached, the bottleneck shifts to
-# push+boot and you get closer to ~30s. We considered build-push-first /
-# stop / deploy-skip-push but `kamal build push` in Kamal 2 only pushes
-# an already-built image — it doesn't build — so the split-flow needs
-# `kamal build deliver` and tag invariance across both invocations,
-# which is fragile with `_uncommitted_<hash>` tags. Reliable > clever.
+# Total downtime per deploy: ~10–30 s, regardless of build time. This
+# requires the working tree to be clean between commands (no
+# `_uncommitted_<hash>` tag drift) — `make kamal-deploy` doesn't touch
+# tracked files between calls, so committing before deploy is the only
+# discipline needed.
+#
+# `kamal build deliver` is the explicit name for build+push.
+# `kamal build push` alone does NOT build — it only pushes a pre-built
+# image — and silently no-ops if nothing's in the local Docker cache.
 #
 # Volume ownership is enforced by .kamal/hooks/pre-deploy on every
 # Kamal command — Kamal feeds the hook the actual host list via
 # $KAMAL_HOSTS, no YAML parsing needed.
 kamal-deploy: vendor .kamal/secrets
+	kamal build deliver
 	-kamal app stop
-	kamal deploy
+	kamal deploy --skip-push
 
 # Same image + same env, fresh container. Use after editing
 # .kamal/secrets or when you suspect a stuck process.
