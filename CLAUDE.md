@@ -49,18 +49,24 @@ internal/
 ├── model/types.go                 # all wire types: Service, Instance, Interface, Session,
 │                                  # AuditEntry, Event, Visibility, Status; constants. NO local User type.
 ├── store/                         # bbolt persistence + in-memory pub/sub (events fan-out)
-│   ├── bolt.go                    # Open/Close, services + instances, Subscriber/emit, Snapshot, ApplyRemote
+│   ├── bolt.go                    # Open/Close, services + instances, Subscriber/emit, Snapshot, ApplyRemote, SetBlocked
 │   ├── rename.go                  # RenameService (atomic move of service + all instances)
 │   ├── sessions.go                # PutSession/GetSession/DeleteSession/SweepExpiredSessions (browser sessions only)
+│   ├── affinity.go                # sticky-token bindings (PutAffinity/GetAffinity/Sweep), replicated
 │   └── audit.go                   # AppendAudit/ListAudit (timestamp-keyed, reverse cursor)
+├── semver/semver.go               # Masterminds/semver wrapper: Match/Valid/ValidConstraint (npm-style)
+├── stats/stats.go                 # node-local lookup collector: per-service rps/sparkline, feed, clients
 ├── auth/
 │   ├── auth.go                    # static-token Authenticator (s2s tokens, untouched)
 │   └── identity.go                # Resolver: cookie OR static token OR iframe-JWT → Identity;
 │                                  # corp.Client integration; RoleFromPerms; CanEditService
 ├── health/health.go               # TTL sweeper + optional active TCP/HTTP probes
-├── cluster/cluster.go             # memberlist plumbing, broadcast, anti-entropy snapshots
+├── cluster/cluster.go             # memberlist plumbing (optional SecretKey encryption), broadcast
+│                                  # (TCP SendReliable for >1KB events), anti-entropy snapshots
 └── server/
     ├── server.go                  # Run(), routes(), service/instance/discover/watch handlers, CORS, loginLimiter
+    ├── discover_pick.go           # version-filtered discover, format=addr, weighted + sticky-token pick
+    ├── observability_handlers.go  # block/unblock, GET /v1/stats, open Prometheus GET /metrics
     ├── hub.go                     # WebSocket fan-out for /v1/watch
     ├── auth_handlers.go           # /v1/auth/{login,logout,me}, /v1/corp/users/search,
     │                              # verify-password helper, requireAdmin, audit helper, safeStoreErr
@@ -200,6 +206,57 @@ ACL semantics:
 
 Tags ride along with the rest of the Service blob (gossip + anti-entropy carry them for free). The Go client mirrors all three: `ListServicesByTag`, `ListTags`, `DiscoverByTag`. `Registration.Tags` opportunistically merges into the parent service on `Register` (best-effort — a failed merge does not abort the instance write).
 
+### Versions & semver discovery
+
+`Instance.Version` is a free-form string; when it parses as semver it unlocks
+constraint queries. `internal/semver` wraps `Masterminds/semver/v3` (npm-style:
+`>=2.1.0`, `^2.1.0`, `~2.1.0`, `1.x`, `1.2.0 - 1.3.5`). Discovery endpoints take
+`?version=<constraint>`; **instances with an empty/non-semver Version are
+excluded when a constraint is present** (strict by design). Bad constraints →
+400. `discover_pick.go` is the single source of the filter (`upInstances`),
+which also drops blocked instances.
+
+- `GET /v1/discover/{name}?version=…` — filtered instances (or `&format=addr[&iface=WEB]` for a flat `["host:port"]` list).
+- `GET /v1/discover/{name}/pick?version=…&iface=…&token=…` — one instance (weighted, or sticky by token). Returns `{address,url,instance,sticky,rebound}`; 503 when none match.
+- `GET /v1/instances` — every instance across all services (dashboard, avoids N+1).
+
+### Sticky-token balancing (affinity)
+
+`pick?token=<opaque>` pins a token to an instance so repeated calls land on the
+same one until it idles past `DISCOVERY_AFFINITY_TTL` (default 20 min, sliding).
+`model.Affinity` rows live in the `affinity` bbolt bucket (`store/affinity.go`),
+**persist across restart and replicate cluster-wide** via `EventAffinityUpserted`
+(gossip + `Snapshot.Affinity` + `ApplyRemote`, LWW on `UpdatedAt`). A pure idle
+refresh writes locally **without emitting** (throttled to ~4/TTL) to avoid gossip
+flood — only create/re-bind replicates (same stance as `SetLastCheck`). If the
+pinned instance goes DOWN/blocked/away the next pick re-binds to a healthy one
+(`rebound:true`). `runSweeper` in `main.go` evicts expired affinity + sessions.
+
+### Operator block (kill-switch)
+
+`Instance.Blocked` excludes an instance from discover/pick (traffic rebalances)
+while it stays UP/heartbeating. It is **not** in the registration payload —
+`store.PutInstance` preserves it across re-registers so a self-managed client
+can't un-block itself. Toggle only via `POST /v1/services/{name}/instances/{id}/block`
+(`store.SetBlocked`, bumps UpdatedAt → replicates); the handler uses
+`allowInstanceWrite` (write+ACL) but skips `rejectManagedEdit`, so blocking works
+on managed instances — it's an operator action. UI shows a Block/Unblock button.
+
+### Observability (stats + metrics)
+
+`internal/stats` is a **node-local** in-memory collector (not persisted/replicated):
+per-service request counters + a 120s rps ring (sparkline), a recent-lookup feed,
+and a per-client map. Lookups are recorded in the discover/pick handlers; the
+caller is identified by `X-Discovery-Client` header → `?client=` → remote IP.
+`GET /v1/stats` feeds the dashboard.
+
+`GET /metrics` is Prometheus text format, **open (outside the `/v1` auth
+pipeline)** and **cluster-wide** for health gauges (every node holds the full
+replicated store): `discovery_up{service,version}` (materialised to 0 for any
+(service,version) with no live instance — easy `==0` alarm), `discovery_instances{service,status}`,
+`discovery_blocked{service}`, `discovery_requests_total{service,kind}` (node-local),
+`discovery_cluster_nodes`.
+
 ### Managed instances
 
 `Instance.Managed bool` marks an instance as self-registered by a client
@@ -248,6 +305,15 @@ comparing `UpdatedAt`. Don't bypass it for cross-node updates.
 a full HTTP snapshot from one peer; every 30 s they re-pull from a random peer
 (anti-entropy). Service ACL fields (`OwnerID`, `Grants`, `Visibility`) ride on
 the same JSON-encoded `Service` blobs, so they replicate for free.
+
+**Hardening (opt-in).** `DISCOVERY_GOSSIP_SECRET` (base64 of 16/24/32 bytes →
+`memberlist.SecretKey`) encrypts + authenticates all gossip; a wrong/absent key
+is rejected at join. A malformed key is a hard startup error (no silent plaintext
+fallback). `DISCOVERY_CLUSTER_TOKEN` gates `/cluster/snapshot`. When `-seeds` is
+set but either is empty, `main.go` logs a loud WARN. `broadcastEvent` sends
+events >1 KB via `SendReliable` (TCP) instead of the UDP gossip queue, which
+silently drops oversized broadcasts — small events still use the cheap queue,
+anti-entropy backstops both.
 
 ### Health
 

@@ -1,5 +1,6 @@
 import { BrowserRouter, Route, Routes, Navigate, useLocation } from "react-router-dom";
 import { AppShell } from "./components/AppShell";
+import Dashboard from "./pages/Dashboard";
 import Services from "./pages/Services";
 import ServiceDetail from "./pages/ServiceDetail";
 import Cluster from "./pages/Cluster";
@@ -33,7 +34,8 @@ export default function App() {
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route element={<RequireAuth><AppShell /></RequireAuth>}>
-          <Route index element={<Services />} />
+          <Route index element={<Dashboard />} />
+          <Route path="/services" element={<Services />} />
           <Route path="/services/:name" element={<ServiceDetail />} />
           <Route path="/cluster" element={<Cluster />} />
           <Route path="/tokens" element={<Tokens />} />

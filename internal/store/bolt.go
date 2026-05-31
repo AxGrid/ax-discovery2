@@ -17,7 +17,8 @@ var (
 	bktServices  = []byte("services")
 	bktInstances = []byte("instances")
 	bktSessions  = []byte("sessions")
-	bktAudit     = []byte("audit") // key: timestamp_unix_nano + "/" + uuid (sorted ascending)
+	bktAffinity  = []byte("affinity") // key: service + "/" + token (sticky load-balancing bindings)
+	bktAudit     = []byte("audit")    // key: timestamp_unix_nano + "/" + uuid (sorted ascending)
 
 	ErrNotFound = errors.New("not found")
 	ErrConflict = errors.New("conflict")
@@ -45,7 +46,7 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("open bbolt: %w", err)
 	}
 	err = db.Update(func(tx *bolt.Tx) error {
-		for _, b := range [][]byte{bktServices, bktInstances, bktSessions, bktAudit} {
+		for _, b := range [][]byte{bktServices, bktInstances, bktSessions, bktAffinity, bktAudit} {
 			if _, err := tx.CreateBucketIfNotExists(b); err != nil {
 				return err
 			}
@@ -200,6 +201,15 @@ func (s *Store) PutInstance(inst *model.Instance) error {
 	}
 	key := instanceKey(inst.ServiceName, inst.ID)
 	err := s.db.Update(func(tx *bolt.Tx) error {
+		// Preserve the operator Blocked kill-switch across re-registration —
+		// a self-managed client must not be able to un-block itself simply by
+		// sending a fresh PUT (Blocked isn't in the registration payload).
+		if existing := tx.Bucket(bktInstances).Get(key); existing != nil {
+			var prev model.Instance
+			if err := json.Unmarshal(existing, &prev); err == nil {
+				inst.Blocked = prev.Blocked
+			}
+		}
 		// Ensure service exists; auto-create a stub if missing for ergonomic registration.
 		bs := tx.Bucket(bktServices)
 		if bs.Get([]byte(inst.ServiceName)) == nil {
@@ -346,6 +356,42 @@ func (s *Store) SetStatus(service, id string, status model.Status) (*model.Insta
 	return &updated, nil
 }
 
+// SetBlocked toggles the operator kill-switch on an instance. A blocked
+// instance stays in the catalog (and keeps its UP/DOWN status) but is filtered
+// out of /discover and /pick. Bumps UpdatedAt and emits so the change wins
+// last-write-wins replication and reaches peers + the UI immediately.
+func (s *Store) SetBlocked(service, id string, blocked bool) (*model.Instance, error) {
+	key := instanceKey(service, id)
+	var updated model.Instance
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bktInstances)
+		v := b.Get(key)
+		if v == nil {
+			return ErrNotFound
+		}
+		if err := json.Unmarshal(v, &updated); err != nil {
+			return err
+		}
+		updated.Blocked = blocked
+		updated.UpdatedAt = time.Now().UTC()
+		buf, err := json.Marshal(&updated)
+		if err != nil {
+			return err
+		}
+		return b.Put(key, buf)
+	})
+	if err != nil {
+		return nil, err
+	}
+	s.emit(model.Event{
+		Type:     model.EventInstanceUpserted,
+		Service:  service,
+		Instance: id,
+		Payload:  &updated,
+	})
+	return &updated, nil
+}
+
 func (s *Store) GetInstance(service, id string) (*model.Instance, error) {
 	var inst model.Instance
 	err := s.db.View(func(tx *bolt.Tx) error {
@@ -417,6 +463,7 @@ func (s *Store) DeleteInstance(service, id string) error {
 type Snapshot struct {
 	Services  []model.Service  `json:"services"`
 	Instances []model.Instance `json:"instances"`
+	Affinity  []model.Affinity `json:"affinity,omitempty"`
 }
 
 func (s *Store) Snapshot() (*Snapshot, error) {
@@ -428,7 +475,11 @@ func (s *Store) Snapshot() (*Snapshot, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Snapshot{Services: svcs, Instances: insts}, nil
+	affs, err := s.ListAffinity()
+	if err != nil {
+		return nil, err
+	}
+	return &Snapshot{Services: svcs, Instances: insts, Affinity: affs}, nil
 }
 
 // ApplyRemote merges a remote event into local state.
@@ -460,6 +511,22 @@ func (s *Store) ApplyRemote(ev model.Event) error {
 		return s.putInstanceRaw(&inst, ev)
 	case model.EventInstanceDeleted:
 		return s.deleteInstanceRaw(ev.Service, ev.Instance, ev)
+	case model.EventAffinityUpserted:
+		var a model.Affinity
+		if err := remarshal(ev.Payload, &a); err != nil {
+			return err
+		}
+		existing, err := s.getAffinityRaw(a.ServiceName, a.Token)
+		if err == nil && !existing.UpdatedAt.Before(a.UpdatedAt) {
+			return nil
+		}
+		return s.putAffinityRaw(&a, ev)
+	case model.EventAffinityDeleted:
+		var a model.Affinity
+		if err := remarshal(ev.Payload, &a); err != nil {
+			return err
+		}
+		return s.deleteAffinityRaw(a.ServiceName, a.Token, ev)
 	}
 	return nil
 }

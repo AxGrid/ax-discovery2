@@ -118,14 +118,21 @@ type InstanceCheck struct {
 
 // Instance is a single running process registered for a Service.
 type Instance struct {
-	ID            string            `json:"id"`
-	ServiceName   string            `json:"service"`
-	Address       string            `json:"address"`
-	Interfaces    []Interface       `json:"interfaces"`
-	Weight        int               `json:"weight"`
-	Status        Status            `json:"status"`
-	Metadata      map[string]string `json:"metadata,omitempty"`
-	TTLSeconds    int               `json:"ttlSeconds"`
+	ID          string `json:"id"`
+	ServiceName string `json:"service"`
+	Address     string `json:"address"`
+
+	// Version is the released version of the code this instance runs,
+	// e.g. "2.1.0". Free-form, but semver-comparable values unlock
+	// constraint queries on /discover (?version=>=2.1.0). Instances with a
+	// non-semver or empty Version are excluded when a constraint is supplied.
+	Version string `json:"version,omitempty"`
+
+	Interfaces []Interface       `json:"interfaces"`
+	Weight     int               `json:"weight"`
+	Status     Status            `json:"status"`
+	Metadata   map[string]string `json:"metadata,omitempty"`
+	TTLSeconds int               `json:"ttlSeconds"`
 
 	// Managed marks an instance as self-registered by a client library
 	// (discovery2-client.Register sets it to true). UI sessions cannot
@@ -135,6 +142,14 @@ type Instance struct {
 	// operator accidentally changing fields the client will overwrite on
 	// its next restart.
 	Managed bool `json:"managed,omitempty"`
+
+	// Blocked is an operator kill-switch: a blocked instance is excluded from
+	// /discover and /pick (so traffic rebalances onto its siblings) even while
+	// it is otherwise UP and heartbeating. It is deliberately NOT part of the
+	// registration payload — store.PutInstance preserves it across re-registers
+	// so a self-managed client can't un-block itself. Toggle it via the
+	// dedicated /block endpoint (store.SetBlocked).
+	Blocked bool `json:"blocked,omitempty"`
 
 	// Liveness configuration.
 	CheckMode        CheckMode `json:"checkMode,omitempty"`
@@ -232,7 +247,29 @@ const (
 	EventInstanceUpserted = "instance.upserted"
 	EventInstanceDeleted  = "instance.deleted"
 	EventInstanceStatus   = "instance.status"
+	EventAffinityUpserted = "affinity.upserted"
+	EventAffinityDeleted  = "affinity.deleted"
 )
+
+// Affinity pins a client-supplied token to a single instance of a service so
+// repeated /discover/{name}/pick?token=… calls keep landing on the same
+// instance ("sticky" load balancing). It is persisted (survives restart) and
+// replicated across the cluster via gossip + anti-entropy so a client routed
+// to any node gets the same instance.
+//
+// ExpiresAt implements an idle timeout: each pick slides it forward; once the
+// token goes quiet past the window the binding is swept and the next pick
+// re-balances. UpdatedAt drives last-write-wins replication, independent of
+// the sliding ExpiresAt.
+type Affinity struct {
+	Token       string    `json:"token"`
+	ServiceName string    `json:"service"`
+	InstanceID  string    `json:"instanceId"`
+	CreatedAt   time.Time `json:"createdAt"`
+	LastSeen    time.Time `json:"lastSeen"`
+	ExpiresAt   time.Time `json:"expiresAt"`
+	UpdatedAt   time.Time `json:"updatedAt"`
+}
 
 // Session ties a cookie token to a corp-ui user. The user record itself
 // lives in corp-ui — we only cache the bits the UI needs to render and the
@@ -265,16 +302,18 @@ type AuditEntry struct {
 
 // Audit action constants — keep in sync with anything emitting audit entries.
 const (
-	AuditServiceCreated   = "service.created"
-	AuditServiceUpdated   = "service.updated"
-	AuditServiceDeleted   = "service.deleted"
-	AuditInstanceUpserted = "instance.upserted"
-	AuditInstanceDeleted  = "instance.deleted"
-	AuditGrantAdded       = "service.grant.added"
-	AuditGrantRemoved     = "service.grant.removed"
-	AuditUserLogin        = "user.login"
-	AuditUserLogout       = "user.logout"
-	AuditLoginFailed      = "user.login.failed"
+	AuditServiceCreated    = "service.created"
+	AuditServiceUpdated    = "service.updated"
+	AuditServiceDeleted    = "service.deleted"
+	AuditInstanceUpserted  = "instance.upserted"
+	AuditInstanceDeleted   = "instance.deleted"
+	AuditInstanceBlocked   = "instance.blocked"
+	AuditInstanceUnblocked = "instance.unblocked"
+	AuditGrantAdded        = "service.grant.added"
+	AuditGrantRemoved      = "service.grant.removed"
+	AuditUserLogin         = "user.login"
+	AuditUserLogout        = "user.logout"
+	AuditLoginFailed       = "user.login.failed"
 )
 
 // Event is a change notification.

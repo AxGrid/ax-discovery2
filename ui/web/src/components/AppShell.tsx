@@ -5,7 +5,7 @@ import {
   Avatar, AvatarFallback, Button, ThemeToggle,
   Tooltip, TooltipContent, TooltipTrigger,
 } from "@/components/ui";
-import { FileText, Info, KeyRound, Layers, LogOut, Network } from "lucide-react";
+import { FileText, Info, KeyRound, LayoutDashboard, Layers, LogOut, Network } from "lucide-react";
 
 // AppShell renders a top bar instead of a sidebar. The reasoning:
 //
@@ -56,7 +56,8 @@ function TopBar({ me, logout, mode }: {
             and is discoverability poison. Four short items wrap cleanly
             into two rows on narrow screens instead. */}
         <nav className="flex flex-wrap items-center gap-1 min-w-0 flex-1">
-          <NavItem to="/" end icon={<Layers className="size-4" />}>Services</NavItem>
+          <NavItem to="/" end icon={<LayoutDashboard className="size-4" />}>Dashboard</NavItem>
+          <NavItem to="/services" icon={<Layers className="size-4" />}>Services</NavItem>
           <NavItem to="/cluster" icon={<Network className="size-4" />}>Cluster</NavItem>
           <NavItem to="/tokens" icon={<KeyRound className="size-4" />}>Tokens</NavItem>
           {me?.isAdmin && (

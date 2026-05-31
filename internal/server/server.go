@@ -23,6 +23,7 @@ import (
 	"github.com/axgrid/discovery2/internal/cluster"
 	"github.com/axgrid/discovery2/internal/health"
 	"github.com/axgrid/discovery2/internal/model"
+	"github.com/axgrid/discovery2/internal/stats"
 	"github.com/axgrid/discovery2/internal/store"
 )
 
@@ -35,6 +36,12 @@ type Config struct {
 	// service tokens (Bearer / X-API-Token) and anonymous reads work — there's
 	// no way for a human to log in.
 	Corp auth.CorpConfig
+
+	// AffinityTTL is the idle timeout for sticky-token bindings on
+	// /discover/{name}/pick?token=…. Each pick slides the window forward;
+	// once a token goes quiet past it, the binding is swept and re-balanced.
+	// Zero means the 20-minute default.
+	AffinityTTL time.Duration
 
 	// TLS turns on automatic Let's Encrypt certificates via x/crypto/autocert.
 	// When Enable is true, Listen is ignored; the server runs on TLS.Listen
@@ -73,11 +80,11 @@ type Server struct {
 	cluster    *cluster.Cluster
 	checker    *health.Checker
 	hub        *Hub
+	stats      *stats.Collector
 	loginRates *loginLimiter
 
 	srv *http.Server
 }
-
 
 func New(cfg Config, s *store.Store, a *auth.Authenticator, c *cluster.Cluster, hc *health.Checker) *Server {
 	if cfg.Logger == nil {
@@ -92,6 +99,7 @@ func New(cfg Config, s *store.Store, a *auth.Authenticator, c *cluster.Cluster, 
 		cluster:    c,
 		checker:    hc,
 		hub:        NewHub(s),
+		stats:      stats.New(),
 		loginRates: newRateLimiter(),
 	}
 }
@@ -252,7 +260,6 @@ func redirectToHTTPS(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, target, http.StatusMovedPermanently)
 }
 
-
 func (s *Server) routes(mux *http.ServeMux) {
 	api := http.NewServeMux()
 
@@ -268,6 +275,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	api.HandleFunc("DELETE /v1/services/{name}", s.deleteService)
 	api.HandleFunc("GET /v1/tags", s.listTags)
 
+	api.HandleFunc("GET /v1/instances", s.listAllInstances)
 	api.HandleFunc("GET /v1/services/{name}/instances", s.listInstances)
 	api.HandleFunc("POST /v1/services/{name}/instances", s.registerInstance)
 	api.HandleFunc("PUT /v1/services/{name}/instances/{id}", s.upsertInstance)
@@ -275,6 +283,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	api.HandleFunc("DELETE /v1/services/{name}/instances/{id}", s.deleteInstance)
 	api.HandleFunc("POST /v1/services/{name}/instances/{id}/heartbeat", s.heartbeat)
 	api.HandleFunc("POST /v1/services/{name}/instances/{id}/check", s.checkInstance)
+	api.HandleFunc("POST /v1/services/{name}/instances/{id}/block", s.blockInstance)
 
 	// Grants on a service
 	api.HandleFunc("POST /v1/services/{name}/grants", s.addGrant)
@@ -286,9 +295,11 @@ func (s *Server) routes(mux *http.ServeMux) {
 	// Discovery + cluster + watch
 	api.HandleFunc("GET /v1/discover", s.discoverByTag)
 	api.HandleFunc("GET /v1/discover/{name}", s.discover)
+	api.HandleFunc("GET /v1/discover/{name}/pick", s.discoverPick)
 	api.HandleFunc("GET /v1/cluster/members", s.clusterMembers)
 	api.HandleFunc("POST /v1/cluster/join", s.clusterJoin)
 	api.HandleFunc("GET /v1/health", s.healthz)
+	api.HandleFunc("GET /v1/stats", s.listStats)
 	api.HandleFunc("GET /v1/watch", s.watch)
 
 	// Users (admin) — proxied to corp-ui for autocomplete in grants editor.
@@ -308,6 +319,9 @@ func (s *Server) routes(mux *http.ServeMux) {
 	if s.cluster != nil {
 		mux.HandleFunc("/cluster/snapshot", s.cluster.HandleSnapshot)
 	}
+	// Prometheus scrape endpoint — intentionally outside the /v1 auth pipeline
+	// so a scraper needs no credentials (cluster-wide health gauges).
+	mux.HandleFunc("GET /metrics", s.metrics)
 	if s.cfg.UI != nil {
 		mux.Handle("/", spaHandler(s.cfg.UI))
 	}
@@ -543,6 +557,23 @@ func (s *Server) deleteService(w http.ResponseWriter, r *http.Request) {
 
 // --- instance handlers ---
 
+// listAllInstances returns every instance across all services — the dashboard
+// uses it to render per-service version/health breakdowns without an N+1 fan-out.
+func (s *Server) listAllInstances(w http.ResponseWriter, r *http.Request) {
+	if !requireRead(w, r) {
+		return
+	}
+	insts, err := s.store.ListAllInstances()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	if insts == nil {
+		insts = []model.Instance{}
+	}
+	writeJSON(w, http.StatusOK, insts)
+}
+
 func (s *Server) listInstances(w http.ResponseWriter, r *http.Request) {
 	if !requireRead(w, r) {
 		return
@@ -564,6 +595,7 @@ func (s *Server) listInstances(w http.ResponseWriter, r *http.Request) {
 type instanceInput struct {
 	ID               string            `json:"id,omitempty"`
 	Address          string            `json:"address"`
+	Version          string            `json:"version,omitempty"`
 	Interfaces       []model.Interface `json:"interfaces,omitempty"`
 	Weight           int               `json:"weight,omitempty"`
 	Status           model.Status      `json:"status,omitempty"`
@@ -579,6 +611,7 @@ func (in instanceInput) toModel(serviceName, id string) model.Instance {
 		ID:               id,
 		ServiceName:      serviceName,
 		Address:          in.Address,
+		Version:          in.Version,
 		Interfaces:       in.Interfaces,
 		Weight:           in.Weight,
 		Status:           in.Status,
@@ -788,26 +821,42 @@ func (s *Server) allowInstanceWrite(w http.ResponseWriter, r *http.Request) bool
 
 // --- discovery / cluster / health ---
 
+// discover returns the UP instances of a service. Optional query params:
+//
+//	?version=<constraint>  npm-style semver filter, e.g. >=2.1.0, ^2.1, 1.x.
+//	                       Instances with an empty/non-semver Version are
+//	                       excluded when a constraint is supplied.
+//	?format=addr           return a flat ["host:port", …] list instead of full
+//	                       Instance objects (use ?iface=NAME to pick the port).
+//	?iface=<name>          which interface's port to use for addr/url output.
 func (s *Server) discover(w http.ResponseWriter, r *http.Request) {
 	if !requireRead(w, r) {
 		return
 	}
-	insts, err := s.store.ListInstances(r.PathValue("name"))
+	constraint, ok := versionConstraint(w, r)
+	if !ok {
+		return
+	}
+	name := r.PathValue("name")
+	insts, err := s.store.ListInstances(name)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	out := make([]model.Instance, 0, len(insts))
-	for _, i := range insts {
-		if i.Status == model.StatusUp {
-			out = append(out, i)
-		}
-	}
-	writeJSON(w, http.StatusOK, out)
+	out := upInstances(insts, constraint)
+	s.stats.Record(stats.Lookup{
+		Client:  clientName(r),
+		Service: name,
+		Kind:    stats.KindDiscover,
+		Version: constraint,
+		Count:   len(out),
+	})
+	s.writeDiscover(w, r, out)
 }
 
 // discoverByTag returns up-instances of every service that carries the given
 // tag. Required query string is ?tag=<value>. With no tag, returns 400.
+// Honours the same ?version / ?format / ?iface params as discover.
 func (s *Server) discoverByTag(w http.ResponseWriter, r *http.Request) {
 	if !requireRead(w, r) {
 		return
@@ -815,6 +864,10 @@ func (s *Server) discoverByTag(w http.ResponseWriter, r *http.Request) {
 	tag := strings.TrimSpace(r.URL.Query().Get("tag"))
 	if tag == "" {
 		writeErr(w, http.StatusBadRequest, errors.New("tag query parameter required"))
+		return
+	}
+	constraint, ok := versionConstraint(w, r)
+	if !ok {
 		return
 	}
 	svcs, err := s.store.ListServices()
@@ -829,13 +882,16 @@ func (s *Server) discoverByTag(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusInternalServerError, err)
 			return
 		}
-		for _, i := range insts {
-			if i.Status == model.StatusUp {
-				out = append(out, i)
-			}
-		}
+		out = append(out, upInstances(insts, constraint)...)
 	}
-	writeJSON(w, http.StatusOK, out)
+	s.stats.Record(stats.Lookup{
+		Client:  clientName(r),
+		Service: "tag:" + tag,
+		Kind:    stats.KindTag,
+		Version: constraint,
+		Count:   len(out),
+	})
+	s.writeDiscover(w, r, out)
 }
 
 func (s *Server) clusterMembers(w http.ResponseWriter, r *http.Request) {

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams, Link } from "react-router-dom";
-import { ArrowLeft, Check, Copy, Hash, Lock, Plus, Settings, Trash2 } from "lucide-react";
+import { ArrowLeft, Ban, Check, Copy, Hash, Lock, Plus, Settings, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { api, CheckMode, CheckResponse, CorpUserHit, Instance, Interface, ProbeResult, Service, Visibility, watch } from "@/lib/api";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -61,7 +61,7 @@ export default function ServiceDetail() {
     try {
       await api.deleteService(name);
       toast.success(`Service "${name}" deleted`);
-      navigate("/");
+      navigate("/services");
     } catch (e: any) { toast.error(e.message); }
   }
 
@@ -70,6 +70,14 @@ export default function ServiceDetail() {
       await api.deleteInstance(name, id);
       toast.success("Instance deleted");
       setPendingDeleteInst(null);
+      refresh();
+    } catch (e: any) { toast.error(e.message); }
+  }
+
+  async function toggleBlock(inst: Instance) {
+    try {
+      await api.blockInstance(name, inst.id, !inst.blocked);
+      toast.success(inst.blocked ? "Instance unblocked — back in rotation" : "Instance blocked — traffic rebalanced");
       refresh();
     } catch (e: any) { toast.error(e.message); }
   }
@@ -149,7 +157,7 @@ export default function ServiceDetail() {
   return (
     <div className="p-6 max-w-5xl mx-auto">
       <div className="mb-6">
-        <Link to="/" className="inline-flex items-center gap-1 text-sm text-fg-muted hover:text-fg">
+        <Link to="/services" className="inline-flex items-center gap-1 text-sm text-fg-muted hover:text-fg">
           <ArrowLeft className="size-3.5" /> Services
         </Link>
         <div className="flex items-end justify-between gap-3 mt-2">
@@ -163,7 +171,7 @@ export default function ServiceDetail() {
             {service?.tags && service.tags.length > 0 && (
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {service.tags.map(t => (
-                  <Link key={t} to={`/?tag=${encodeURIComponent(t)}`}
+                  <Link key={t} to={`/services?tag=${encodeURIComponent(t)}`}
                     className="inline-flex items-center gap-1 h-6 px-2 rounded-full text-xs font-medium bg-surface border border-border text-fg-muted hover:text-fg hover:border-border-strong transition-colors">
                     <Hash className="size-3" />
                     {t}
@@ -238,13 +246,21 @@ export default function ServiceDetail() {
       ) : (
         <div className="space-y-3">
           {instances.map(inst => (
-            <Card key={inst.id}>
+            <Card key={inst.id} className={inst.blocked ? "border-warning/50" : undefined}>
               <CardContent className="pt-4">
                 <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0 flex-1">
+                  <div className={`min-w-0 flex-1 ${inst.blocked ? "opacity-60" : ""}`}>
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-mono text-sm truncate">{inst.address}</span>
                       <StatusBadge status={inst.status} />
+                      {inst.version && (
+                        <Badge variant="brand" size="sm" title="Instance version (semver-queryable)">v{inst.version}</Badge>
+                      )}
+                      {inst.blocked && (
+                        <Badge variant="warning" size="sm" title="Operator-blocked — excluded from discover/pick.">
+                          <Ban className="size-3 mr-1" />blocked
+                        </Badge>
+                      )}
                       <CheckModeBadge mode={inst.checkMode} />
                       {inst.managed && (
                         <Badge variant="info" size="sm" title="Self-registered by the service via discovery2-client. UI edits are blocked.">
@@ -284,6 +300,17 @@ export default function ServiceDetail() {
                         <Button variant="secondary" size="sm" leftIcon={<Settings className="size-3.5" />}
                           onClick={() => setEditingInst(inst)}>Edit</Button>
                       )}
+                      {/* Block works even on managed instances — it's an
+                          operator action the owning client cannot override. */}
+                      <Button
+                        variant={inst.blocked ? "primary" : "secondary"}
+                        size="sm"
+                        leftIcon={inst.blocked ? <Check className="size-3.5" /> : <Ban className="size-3.5" />}
+                        onClick={() => toggleBlock(inst)}
+                        title={inst.blocked ? "Return this instance to rotation" : "Remove from discovery so traffic rebalances"}
+                      >
+                        {inst.blocked ? "Unblock" : "Block"}
+                      </Button>
                       <Button variant="secondary" size="sm" leftIcon={<Copy className="size-3.5" />}
                         onClick={() => copyInstance(inst)}>Copy</Button>
                       {!inst.managed && (
@@ -585,6 +612,7 @@ function InstanceEditor({
       await api.putInstance(serviceName, id, {
         id,
         address: inst.address,
+        version: inst.version?.trim() || undefined,
         interfaces: inst.interfaces,
         weight: inst.weight,
         status: inst.status,
@@ -610,11 +638,18 @@ function InstanceEditor({
               <Input id="inst-id" value={inst.id} disabled className="font-mono text-xs" />
             </div>
           )}
-          <div className="md:col-span-2">
+          <div>
             <Label htmlFor="inst-addr">Address (host or IP)</Label>
             <Input id="inst-addr" value={inst.address}
               onChange={e => update("address", e.target.value)}
               placeholder="10.0.0.5 or service.internal" autoFocus={isNew} />
+          </div>
+          <div>
+            <Label htmlFor="inst-version">Version</Label>
+            <Input id="inst-version" value={inst.version ?? ""}
+              onChange={e => update("version", e.target.value)}
+              placeholder="2.1.0" className="font-mono" />
+            <p className="text-xs text-fg-subtle mt-1">Semver enables <code>ver&gt;=2.1.0</code> queries.</p>
           </div>
           <div>
             <Label htmlFor="inst-weight">Weight</Label>

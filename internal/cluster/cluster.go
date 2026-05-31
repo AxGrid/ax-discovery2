@@ -40,15 +40,24 @@ type Cluster struct {
 }
 
 type Config struct {
-	NodeID      string
-	BindAddr    string // e.g. 0.0.0.0
-	BindPort    int    // gossip UDP/TCP port
-	AdvertiseIP string // optional, otherwise discovered
+	NodeID       string
+	BindAddr     string // e.g. 0.0.0.0
+	BindPort     int    // gossip UDP/TCP port
+	AdvertiseIP  string // optional, otherwise discovered
 	AdvertiseAPI string // host:port other nodes use to reach our HTTP API
-	Seeds       []string
-	SyncToken   string // shared secret for /cluster/* endpoints
-	Logger      *slog.Logger
+	Seeds        []string
+	SyncToken    string // shared secret for /cluster/* endpoints
+	// SecretKey enables symmetric encryption + authentication of all gossip
+	// traffic. Must be 16, 24, or 32 bytes (AES-128/192/256); empty = plaintext.
+	// All nodes in a cluster must share the same key.
+	SecretKey []byte
+	Logger    *slog.Logger
 }
+
+// maxGossipBytes is the payload size above which we stop trusting the
+// best-effort UDP gossip path (memberlist silently skips broadcasts that don't
+// fit its per-packet budget) and push the event reliably over TCP instead.
+const maxGossipBytes = 1024
 
 func New(s *store.Store, cfg Config) (*Cluster, error) {
 	if cfg.Logger == nil {
@@ -69,6 +78,10 @@ func New(s *store.Store, cfg Config) (*Cluster, error) {
 	mlCfg.AdvertisePort = cfg.BindPort
 	if cfg.AdvertiseIP != "" {
 		mlCfg.AdvertiseAddr = cfg.AdvertiseIP
+	}
+	if len(cfg.SecretKey) > 0 {
+		// memberlist validates the length (16/24/32) and fails Create otherwise.
+		mlCfg.SecretKey = cfg.SecretKey
 	}
 	mlCfg.LogOutput = io.Discard
 
@@ -167,7 +180,28 @@ func (c *Cluster) broadcastEvent(ev model.Event) {
 		c.log.Warn("broadcast marshal", "err", err)
 		return
 	}
+	// Small events ride the cheap, best-effort UDP gossip queue. Large ones
+	// (a Service/Instance blob with many interfaces or fat metadata) would be
+	// silently skipped by memberlist's broadcast budget and only converge on
+	// the next 30s anti-entropy pull — so push those reliably over TCP now.
+	if len(buf) > maxGossipBytes {
+		c.sendReliable(buf)
+		return
+	}
 	c.broadcasts.QueueBroadcast(&simpleBroadcast{msg: buf})
+}
+
+// sendReliable delivers a payload to every peer over memberlist's TCP
+// user-message channel (received by the same delegate.NotifyMsg as gossip).
+func (c *Cluster) sendReliable(buf []byte) {
+	for _, m := range c.list.Members() {
+		if m.Name == c.cfg.NodeID {
+			continue
+		}
+		if err := c.list.SendReliable(m, buf); err != nil {
+			c.log.Debug("send reliable", "node", m.Name, "err", err)
+		}
+	}
 }
 
 func (c *Cluster) bootstrapSync(ctx context.Context) {
@@ -260,6 +294,16 @@ func (c *Cluster) pullSnapshot(ctx context.Context, peerAPI string) error {
 			Service:  snap.Instances[i].ServiceName,
 			Instance: snap.Instances[i].ID,
 			Payload:  &snap.Instances[i],
+			OriginID: "snapshot",
+		}
+		_ = c.store.ApplyRemote(ev)
+	}
+	for i := range snap.Affinity {
+		ev := model.Event{
+			Type:     model.EventAffinityUpserted,
+			Service:  snap.Affinity[i].ServiceName,
+			Instance: snap.Affinity[i].InstanceID,
+			Payload:  &snap.Affinity[i],
 			OriginID: "snapshot",
 		}
 		_ = c.store.ApplyRemote(ev)

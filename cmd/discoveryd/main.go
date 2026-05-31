@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"flag"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	axrouter "github.com/axgrid/ax-router2/client"
 	"github.com/corp-ui/corp-ui/sdk/go/corp"
@@ -43,7 +45,9 @@ func main() {
 		writeToks   = flag.String("write-tokens", envOr("DISCOVERY_WRITE_TOKENS", ""), "comma-separated write tokens")
 		adminToks   = flag.String("admin-tokens", envOr("DISCOVERY_ADMIN_TOKENS", ""), "comma-separated admin tokens")
 		anon        = flag.Bool("allow-anonymous-read", envBoolOr("DISCOVERY_ALLOW_ANON_READ", true), "allow read without token")
-		clusterTok  = flag.String("cluster-token", envOr("DISCOVERY_CLUSTER_TOKEN", ""), "shared token for cluster sync")
+		clusterTok   = flag.String("cluster-token", envOr("DISCOVERY_CLUSTER_TOKEN", ""), "shared token for cluster sync")
+		gossipSecret = flag.String("gossip-secret", envOr("DISCOVERY_GOSSIP_SECRET", ""), "base64-encoded 16/24/32-byte key to encrypt+authenticate gossip (all nodes must match)")
+		affinityTTL  = flag.Int("affinity-ttl", envIntOr("DISCOVERY_AFFINITY_TTL", 1200), "sticky-token idle timeout in seconds (discover pick?token=)")
 		logLevel    = flag.String("log", envOr("DISCOVERY_LOG", "info"), "log level: debug|info|warn|error")
 
 		// corp-ui SSO
@@ -108,12 +112,24 @@ func main() {
 	defer cancel()
 
 	var (
-		cl  *cluster.Cluster
+		cl   *cluster.Cluster
 		err2 error
 	)
 	advertiseAPI := *advAPI
 	if advertiseAPI == "" {
 		advertiseAPI = "127.0.0.1" + portOf(*listen)
+	}
+	secretKey, err := decodeGossipSecret(*gossipSecret)
+	if err != nil {
+		log.Error("gossip secret", "err", err)
+		os.Exit(1)
+	}
+	clustered := len(splitCSV(*seeds)) > 0
+	if clustered && len(secretKey) == 0 {
+		log.Warn("gossip is UNENCRYPTED — set DISCOVERY_GOSSIP_SECRET (base64 16/24/32 bytes) to encrypt inter-node traffic")
+	}
+	if clustered && strings.TrimSpace(*clusterTok) == "" {
+		log.Warn("/cluster/snapshot is UNAUTHENTICATED — set DISCOVERY_CLUSTER_TOKEN so peers (and only peers) can pull state")
 	}
 	cl, err2 = cluster.New(st, cluster.Config{
 		NodeID:       *nodeID,
@@ -123,6 +139,7 @@ func main() {
 		AdvertiseAPI: advertiseAPI,
 		Seeds:        splitCSV(*seeds),
 		SyncToken:    *clusterTok,
+		SecretKey:    secretKey,
 		Logger:       log,
 	})
 	if err2 != nil {
@@ -145,6 +162,7 @@ func main() {
 			ServiceSlug: *corpSlug,
 			PermKey:     *corpPermKey,
 		},
+		AffinityTTL: time.Duration(*affinityTTL) * time.Second,
 		TLS: server.TLSConfig{
 			Enable:             *acmeEnable,
 			Listen:             *httpsListen,
@@ -157,9 +175,10 @@ func main() {
 	}, st, authn, cl, hc)
 
 	var wg sync.WaitGroup
-	wg.Add(3)
+	wg.Add(4)
 	go func() { defer wg.Done(); hc.Run(ctx) }()
 	go func() { defer wg.Done(); cl.Run(ctx) }()
+	go func() { defer wg.Done(); runSweeper(ctx, st, log) }()
 	go func() {
 		defer wg.Done()
 		if err := srv.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
@@ -204,6 +223,50 @@ func main() {
 	cancel()
 	_ = cl.Shutdown()
 	wg.Wait()
+}
+
+// runSweeper periodically evicts expired browser sessions and idle sticky-token
+// affinity bindings. Both are cheap full-bucket scans; once a minute is plenty.
+func runSweeper(ctx context.Context, st *store.Store, log *slog.Logger) {
+	t := time.NewTicker(time.Minute)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if n, err := st.SweepExpiredSessions(); err != nil {
+				log.Debug("sweep sessions", "err", err)
+			} else if n > 0 {
+				log.Debug("swept sessions", "n", n)
+			}
+			if n, err := st.SweepExpiredAffinity(); err != nil {
+				log.Debug("sweep affinity", "err", err)
+			} else if n > 0 {
+				log.Debug("swept affinity", "n", n)
+			}
+		}
+	}
+}
+
+// decodeGossipSecret parses the base64 gossip key and validates its length.
+// Empty input is fine (plaintext gossip); a malformed or wrong-length key is a
+// hard error so a typo can't silently fall back to no encryption.
+func decodeGossipSecret(s string) ([]byte, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil, nil
+	}
+	key, err := base64.StdEncoding.DecodeString(s)
+	if err != nil {
+		return nil, fmt.Errorf("DISCOVERY_GOSSIP_SECRET must be base64: %w", err)
+	}
+	switch len(key) {
+	case 16, 24, 32:
+		return key, nil
+	default:
+		return nil, fmt.Errorf("DISCOVERY_GOSSIP_SECRET must decode to 16, 24, or 32 bytes, got %d", len(key))
+	}
 }
 
 func newLogger(level string) *slog.Logger {
@@ -294,4 +357,3 @@ func loadDotEnv() {
 		}
 	}
 }
-

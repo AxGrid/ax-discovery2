@@ -35,12 +35,14 @@ export interface Instance {
   id: string;
   service: string;
   address: string;
+  version?: string;
   interfaces: Interface[];
   weight: number;
   status: Status;
   metadata?: Record<string, string>;
   ttlSeconds: number;
   managed?: boolean;
+  blocked?: boolean;
   checkMode?: CheckMode;
   checkIntervalSec?: number;
   lastCheck?: InstanceCheck;
@@ -54,6 +56,7 @@ export interface Instance {
 export type InstanceInput = {
   id?: string;
   address: string;
+  version?: string;
   interfaces: Interface[];
   weight: number;
   status: Status;
@@ -146,6 +149,47 @@ export interface DiscoveryEvent {
   originId?: string;
 }
 
+// --- live request stats (dashboard) ---
+
+export interface StatsLookup {
+  time: string;
+  client?: string;
+  service: string;
+  kind: "discover" | "pick" | "tag";
+  version?: string;
+  count: number;
+  instance?: string;
+  address?: string;
+}
+
+export interface ServiceStat {
+  service: string;
+  total: number;
+  byKind: Record<string, number>;
+  rps: number;
+  sparkline: number[];
+}
+
+export interface ClientServiceStat {
+  service: string;
+  count: number;
+  lastInstance?: string;
+}
+
+export interface ClientStat {
+  name: string;
+  total: number;
+  lastSeen: string;
+  services: ClientServiceStat[];
+}
+
+export interface StatsSnapshot {
+  services: ServiceStat[];
+  clients: ClientStat[];
+  feed: StatsLookup[];
+  generatedAt: string;
+}
+
 export class ApiError extends Error {
   status: number;
   constructor(msg: string, status: number) {
@@ -214,6 +258,7 @@ export const api = {
     req<void>("DELETE", `/v1/services/${encodeURIComponent(service)}/grants/${encodeURIComponent(userId)}`),
 
   // instances
+  listAllInstances: () => req<Instance[]>("GET", "/v1/instances"),
   listInstances: (service: string) =>
     req<Instance[]>("GET", `/v1/services/${encodeURIComponent(service)}/instances`),
   putInstance: (service: string, id: string, body: InstanceInput) =>
@@ -222,6 +267,11 @@ export const api = {
     req<void>("DELETE", `/v1/services/${encodeURIComponent(service)}/instances/${encodeURIComponent(id)}`),
   checkInstance: (service: string, id: string) =>
     req<CheckResponse>("POST", `/v1/services/${encodeURIComponent(service)}/instances/${encodeURIComponent(id)}/check`),
+  blockInstance: (service: string, id: string, blocked: boolean) =>
+    req<Instance>("POST", `/v1/services/${encodeURIComponent(service)}/instances/${encodeURIComponent(id)}/block`, { blocked }),
+
+  // live request stats (dashboard)
+  stats: () => req<StatsSnapshot>("GET", "/v1/stats"),
 
   // audit
   listAudit: (limit = 200, service?: string) =>

@@ -28,13 +28,25 @@ The companion Go client library is its own repository:
 - **On-demand check.** Each instance has a **Check** button that runs a probe
   synchronously and shows the per-interface result (URL, HTTP status, latency,
   error). Useful for debugging registrations.
+- **Versioned discovery.** Each instance carries a semver `version`; query with
+  npm-style constraints (`?version=>=2.1.0`, `^2.1.0`, `~2.1.0`, `1.x`,
+  `1.2.0 - 1.3.5`). Ask for a flat address list or let the server pick one.
 - **Multi-address balancing.** The Go client library picks healthy instances
   via `RoundRobin` (default), `Random`, or `Weighted` strategies, and
-  refreshes its view live over WebSocket.
+  refreshes its view live over WebSocket. Server-side `/pick` adds **sticky
+  token** affinity (persisted, cluster-replicated) and weighted selection.
+- **Operator block.** Take an instance out of rotation with one click to
+  rebalance traffic — without deleting it, and surviving the owning client's
+  re-registration.
+- **Live dashboard + Prometheus metrics.** A service-card dashboard shows
+  per-version health, request rate (sparkline), a live lookup feed, and which
+  clients call which services. `/metrics` exposes `discovery_up{service,version}`
+  for Grafana alarms (e.g. alert when a version drops to 0 instances).
 - **Fault-tolerant cluster.** Nodes find each other via gossip
   (`hashicorp/memberlist`), broadcast change events, and reconcile via
   periodic anti-entropy snapshots. Last-write-wins on `UpdatedAt`. Peers can
-  be added at runtime from the UI by an admin.
+  be added at runtime from the UI by an admin. Gossip can be **encrypted**
+  (`DISCOVERY_GOSSIP_SECRET`) and the snapshot endpoint token-gated.
 - **Corp-ui SSO + per-service ACL.** Users live in corp-ui. Two parallel
   paths: iframe-token Bearer (introspected via corp-ui's `/api/iframe/introspect`)
   or our own `/v1/auth/login` form that delegates to corp-ui's
@@ -105,7 +117,9 @@ All flags also accept env vars (`DISCOVERY_*`). See `.env.example`.
 | `-advertise-ip` | `DISCOVERY_ADVERTISE_IP` | auto | gossip advertise |
 | `-advertise-api` | `DISCOVERY_ADVERTISE_API` | `127.0.0.1:<port>` | host:port peers should use to reach our HTTP API |
 | `-seeds` | `DISCOVERY_SEEDS` | (none) | comma-separated `host:port` |
-| `-cluster-token` | `DISCOVERY_CLUSTER_TOKEN` | (none) | shared secret for `/cluster/*` |
+| `-cluster-token` | `DISCOVERY_CLUSTER_TOKEN` | (none) | shared secret for `/cluster/snapshot` |
+| `-gossip-secret` | `DISCOVERY_GOSSIP_SECRET` | (none) | base64 16/24/32-byte key encrypting gossip (all nodes must match) |
+| `-affinity-ttl` | `DISCOVERY_AFFINITY_TTL` | `1200` | sticky-token idle timeout, seconds (`pick?token=`) |
 | `-read-tokens` / `-write-tokens` / `-admin-tokens` | `DISCOVERY_*_TOKENS` | (none) | comma-separated; bypass corp-ui as `system` identity |
 | `-allow-anonymous-read` | `DISCOVERY_ALLOW_ANON_READ` | `true` | |
 | `-corp-url` | `CORP_URL` | (none) | base URL of the corp-ui console — required for UI login |
@@ -184,21 +198,48 @@ GET    /v1/services/{name}/instances/{id}
 DELETE /v1/services/{name}/instances/{id}
 POST   /v1/services/{name}/instances/{id}/heartbeat # body: {"status":"up"}
 POST   /v1/services/{name}/instances/{id}/check     # synchronous probe; per-interface report
+POST   /v1/services/{name}/instances/{id}/block     # body: {"blocked":true} — take in/out of rotation
+GET    /v1/instances                                # every instance across all services
 
 # Grants (owner or admin only)
 POST   /v1/services/{name}/grants                   # body: {"userId":"..."}
 DELETE /v1/services/{name}/grants/{userId}
 
 # Discovery & cluster
-GET    /v1/discover/{name}                          # only "up" instances
+GET    /v1/discover/{name}                          # "up" instances; ?version=>=2.1.0 semver filter
+GET    /v1/discover/{name}?format=addr&iface=WEB    # flat ["host:port", ...] list
+GET    /v1/discover/{name}/pick                     # one instance (weighted); &token=… for sticky
+GET    /v1/discover?tag=foo                         # "up" instances across services with a tag
 GET    /v1/cluster/members
 POST   /v1/cluster/join                             # admin; body: {"seeds":["host:port", ...]}
 GET    /v1/health
+GET    /v1/stats                                    # live per-service rps, request feed, clients (dashboard)
 GET    /v1/watch                                    # WebSocket → DiscoveryEvent
+
+# Metrics — open (no auth), Prometheus text format, cluster-wide
+GET    /metrics
 
 # Audit (admin only — users themselves live in corp-ui)
 GET    /v1/audit?limit=N&service=NAME
 ```
+
+### Versions, balancing & metrics
+
+- **Versions.** Register instances with a semver `version`; query with npm-style
+  constraints — `?version=>=2.1.0`, `^2.1.0`, `~2.1.0`, `1.x`, `1.2.0 - 1.3.5`.
+  Instances without a valid version are excluded when a constraint is given.
+- **Pick.** `/discover/{name}/pick` returns one instance (`{address,url,instance}`).
+  Add `?token=<id>` for **sticky** balancing: the same token keeps hitting the
+  same instance until it idles past `DISCOVERY_AFFINITY_TTL`; if that instance
+  goes down/blocked it re-binds (`rebound:true`). Bindings persist and replicate
+  across the cluster.
+- **Block.** `POST .../block {"blocked":true}` removes an instance from
+  discover/pick so traffic rebalances, without deleting it; it survives the
+  owning client's re-registration. Toggle from the dashboard.
+- **Metrics / Grafana.** `/metrics` exposes `discovery_up{service,version}`
+  (materialised to `0` when a version has no live instance — alarm on `== 0`),
+  plus `discovery_instances{service,status}`, `discovery_blocked{service}`,
+  `discovery_requests_total{service,kind}`, `discovery_cluster_nodes`.
 
 **Auth** for UI calls:
 
