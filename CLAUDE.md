@@ -10,6 +10,21 @@ This branch is a fork of `master` that swaps the local users / bcrypt /
 sessions stack for corp-ui SSO. Users are not stored locally anymore;
 permissions come from corp-ui's `is_admin` flag and the `perms` map.
 
+**Capability map** (each has a section below; all replicate over the cluster):
+
+- **Versioned discovery** — `Instance.Version` (semver) + npm-style constraint
+  queries on `/discover` and `/pick` (`internal/semver`).
+- **Balancing** — weighted `/pick`, plus **sticky-token affinity** (persisted +
+  replicated, idle TTL, rebind on death).
+- **Operator block** — `Instance.Blocked` kill-switch, survives re-register.
+- **Observability** — node-local request stats (`/v1/stats`, dashboard) and an
+  open, cluster-wide Prometheus `/metrics` (`internal/stats`).
+- **Config store** — typed (`string/int/float/bool/json/bytes`), block-atomic
+  versioned variables in `global / service / version` scopes (`internal/...config`).
+- **Dynamic client tokens** — UI-minted read/write/admin bearer tokens.
+- **Cluster hardening** — optional gossip encryption + reliable large-event send.
+- **ax-router2 exposure** — opt-in reverse-router registration (off by default).
+
 For the user-facing project description, see [`README.md`](README.md).
 The companion Go client library is its own repo at
 [`github.com/axgrid/discovery2-client`](https://github.com/axgrid/discovery2-client)
@@ -19,9 +34,11 @@ The companion Go client library is its own repo at
 
 ## Stack snapshot
 
-- **Backend:** Go 1.23 (toolchain 1.23.4), `go.etcd.io/bbolt`, `hashicorp/memberlist`,
-  `gorilla/websocket`, `golang.org/x/crypto/bcrypt`, `golang.org/x/crypto/acme/autocert`,
-  `joho/godotenv`, `google/uuid`. Standard `net/http` (no chi/gin) — Go 1.22+ pattern matching.
+- **Backend:** Go 1.25, `go.etcd.io/bbolt`, `hashicorp/memberlist`,
+  `gorilla/websocket`, `Masterminds/semver/v3`, `golang.org/x/crypto/acme/autocert`,
+  `joho/godotenv`, `google/uuid`, `axgrid/ax-router2/client`. Standard `net/http`
+  (no chi/gin) — Go 1.22+ pattern matching. Vendored (`/vendor` gitignored;
+  `make vendor` regenerates before a Docker/Kamal build).
 - **Per-instance health modes:** `heartbeat` (default), `http`, `tcp`, `none`.
   Stored on `Instance.CheckMode` + `Instance.CheckIntervalSec`. Single
   ticker dispatches per mode (see `internal/health/health.go`). HTTP/TCP
@@ -34,10 +51,14 @@ The companion Go client library is its own repo at
   modals, sonner toasts. Theme via `data-theme="light|dark"` on `<html>`,
   applied inline before paint to avoid FOUC. Cookie-session auth via
   `credentials: "include"` on every fetch.
-- **Storage:** single bbolt file. Buckets: `services`, `instances`, `users`,
-  `users_by_name`, `sessions`, `audit`. No external DB.
+- **Storage:** single bbolt file. Buckets: `services`, `instances`, `sessions`,
+  `affinity` (sticky tokens), `config` (variables/revisions/drafts),
+  `client_tokens`, `audit`. No external DB. No local `users` bucket — users
+  live in corp-ui.
 - **Cluster:** memberlist gossip + HTTP `/cluster/snapshot` for anti-entropy;
-  last-write-wins on `UpdatedAt`.
+  last-write-wins on `UpdatedAt`. Everything (services, instances, affinity,
+  config, tokens) replicates the same way. Optional gossip encryption via
+  `DISCOVERY_GOSSIP_SECRET`; events >1 KB sent reliably over TCP.
 
 ---
 
@@ -443,6 +464,22 @@ key, not TLS).
 and returns the per-interface report (`{"ok":..., "status":"down", "mode":"http", "results":[...]}`).
 The handler also persists the result via `SetLastCheck` and flips status if
 needed. Used by the UI's "Check" button on each instance card.
+
+### ax-router2 exposure (opt-in)
+
+`cmd/discoveryd/main.go` can register the **whole discovery handler tree**
+(`srv.Handler()`) with an `ax-router2` reverse router in **handler mode** —
+making the API reachable at `https://<AX_ROUTER_NAME>.<router-base>` without
+opening the service port. It's muxed over one outbound TCP connection (no extra
+per-request goroutines, no inbound port).
+
+**It is off by default and gated by `AX_ROUTER_ENABLE` (`-ax-router`).** Setting
+only `AX_ROUTER_HOST` no longer starts it — the explicit boolean must be true.
+The reason is local clusters: every node reads the same `.env`, and ax-router is
+last-writer-wins per service name, so two nodes registering as `discovery` would
+kick each other off. `make run-cluster` passes `-ax-router=false` on every node;
+enable the router on a single node via `make run-router`. When enabled with an
+empty `AX_ROUTER_HOST`, startup fails fast rather than silently no-op'ing.
 
 ---
 

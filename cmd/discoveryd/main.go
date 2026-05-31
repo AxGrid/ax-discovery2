@@ -33,22 +33,22 @@ func main() {
 	loadDotEnv()
 
 	var (
-		listen      = flag.String("listen", envOr("DISCOVERY_LISTEN", ":8500"), "API listen address")
-		dbPath      = flag.String("db", envOr("DISCOVERY_DB", "./discovery.db"), "bbolt database path")
-		nodeID      = flag.String("node-id", envOr("DISCOVERY_NODE_ID", hostnameOr("node-1")), "cluster node id")
-		gossipBind  = flag.String("gossip-bind", envOr("DISCOVERY_GOSSIP_BIND", "0.0.0.0"), "gossip bind addr")
-		gossipPort  = flag.Int("gossip-port", envIntOr("DISCOVERY_GOSSIP_PORT", 7946), "gossip port")
-		advAPI      = flag.String("advertise-api", envOr("DISCOVERY_ADVERTISE_API", ""), "host:port peers should use to reach our API")
-		advIP       = flag.String("advertise-ip", envOr("DISCOVERY_ADVERTISE_IP", ""), "advertised gossip IP")
-		seeds       = flag.String("seeds", envOr("DISCOVERY_SEEDS", ""), "comma-separated peer seeds host:port")
-		readToks    = flag.String("read-tokens", envOr("DISCOVERY_READ_TOKENS", ""), "comma-separated read tokens")
-		writeToks   = flag.String("write-tokens", envOr("DISCOVERY_WRITE_TOKENS", ""), "comma-separated write tokens")
-		adminToks   = flag.String("admin-tokens", envOr("DISCOVERY_ADMIN_TOKENS", ""), "comma-separated admin tokens")
-		anon        = flag.Bool("allow-anonymous-read", envBoolOr("DISCOVERY_ALLOW_ANON_READ", true), "allow read without token")
+		listen       = flag.String("listen", envOr("DISCOVERY_LISTEN", ":8500"), "API listen address")
+		dbPath       = flag.String("db", envOr("DISCOVERY_DB", "./discovery.db"), "bbolt database path")
+		nodeID       = flag.String("node-id", envOr("DISCOVERY_NODE_ID", hostnameOr("node-1")), "cluster node id")
+		gossipBind   = flag.String("gossip-bind", envOr("DISCOVERY_GOSSIP_BIND", "0.0.0.0"), "gossip bind addr")
+		gossipPort   = flag.Int("gossip-port", envIntOr("DISCOVERY_GOSSIP_PORT", 7946), "gossip port")
+		advAPI       = flag.String("advertise-api", envOr("DISCOVERY_ADVERTISE_API", ""), "host:port peers should use to reach our API")
+		advIP        = flag.String("advertise-ip", envOr("DISCOVERY_ADVERTISE_IP", ""), "advertised gossip IP")
+		seeds        = flag.String("seeds", envOr("DISCOVERY_SEEDS", ""), "comma-separated peer seeds host:port")
+		readToks     = flag.String("read-tokens", envOr("DISCOVERY_READ_TOKENS", ""), "comma-separated read tokens")
+		writeToks    = flag.String("write-tokens", envOr("DISCOVERY_WRITE_TOKENS", ""), "comma-separated write tokens")
+		adminToks    = flag.String("admin-tokens", envOr("DISCOVERY_ADMIN_TOKENS", ""), "comma-separated admin tokens")
+		anon         = flag.Bool("allow-anonymous-read", envBoolOr("DISCOVERY_ALLOW_ANON_READ", true), "allow read without token")
 		clusterTok   = flag.String("cluster-token", envOr("DISCOVERY_CLUSTER_TOKEN", ""), "shared token for cluster sync")
 		gossipSecret = flag.String("gossip-secret", envOr("DISCOVERY_GOSSIP_SECRET", ""), "base64-encoded 16/24/32-byte key to encrypt+authenticate gossip (all nodes must match)")
 		affinityTTL  = flag.Int("affinity-ttl", envIntOr("DISCOVERY_AFFINITY_TTL", 1200), "sticky-token idle timeout in seconds (discover pick?token=)")
-		logLevel    = flag.String("log", envOr("DISCOVERY_LOG", "info"), "log level: debug|info|warn|error")
+		logLevel     = flag.String("log", envOr("DISCOVERY_LOG", "info"), "log level: debug|info|warn|error")
 
 		// corp-ui SSO
 		corpURL     = flag.String("corp-url", envOr("CORP_URL", ""), "base URL of the corp-ui console (https://console.example.com) — required for cookie-session login and iframe-token validation")
@@ -56,10 +56,15 @@ func main() {
 		corpSlug    = flag.String("corp-slug", envOr("CORP_SERVICE_SLUG", "discovery"), "slug under which this discovery instance is registered in corp-ui")
 		corpPermKey = flag.String("corp-perm-key", envOr("CORP_PERM_KEY", "discovery"), "permission key in corp-ui whose r/w/a controls discovery access")
 
-		// ax-router2 reverse-router registration (optional)
-		axRouterHost  = flag.String("ax-router-host", envOr("AX_ROUTER_HOST", ""), "host of the ax-router2 reverse router (empty = no registration)")
-		axRouterToken = flag.String("ax-router-token", envOr("AX_ROUTER_TOKEN", ""), "shared token for ax-router2 registration")
-		axRouterName  = flag.String("ax-router-name", envOr("AX_ROUTER_NAME", "discovery"), "service name to advertise on ax-router2")
+		// ax-router2 reverse-router registration (optional). Disabled by default —
+		// must be explicitly turned on. This matters for local clusters: every
+		// node shares the same .env, and if they all dialed the router under the
+		// same service name they'd fight over it (last-writer-wins kicks the
+		// previous node off). Enable it on exactly one node (or leave off).
+		axRouterEnable = flag.Bool("ax-router", envBoolOr("AX_ROUTER_ENABLE", false), "expose the discovery API through an ax-router2 reverse router")
+		axRouterHost   = flag.String("ax-router-host", envOr("AX_ROUTER_HOST", ""), "host:port (control port, default 7000) of the ax-router2 reverse router")
+		axRouterToken  = flag.String("ax-router-token", envOr("AX_ROUTER_TOKEN", ""), "shared token for ax-router2 registration")
+		axRouterName   = flag.String("ax-router-name", envOr("AX_ROUTER_NAME", "discovery"), "service name to advertise on ax-router2")
 
 		// ACME / Let's Encrypt
 		acmeEnable   = flag.Bool("acme", envBoolOr("DISCOVERY_ACME_ENABLE", false), "enable automatic HTTPS via Let's Encrypt (requires public DNS + ports 80/443)")
@@ -187,10 +192,15 @@ func main() {
 		}
 	}()
 
-	// ax-router2 registration (optional). Same handler tree the local
-	// listener serves is muxed over a single outbound TCP connection to
-	// the router — no extra goroutines per request, no exposed port.
-	if strings.TrimSpace(*axRouterHost) != "" {
+	// ax-router2 registration. Off unless explicitly enabled (AX_ROUTER_ENABLE).
+	// The same handler tree the local listener serves is muxed over a single
+	// outbound TCP connection to the router — no extra goroutines per request,
+	// no exposed port. Keep it on a single node when running a cluster.
+	if *axRouterEnable {
+		if strings.TrimSpace(*axRouterHost) == "" {
+			log.Error("ax-router enabled but AX_ROUTER_HOST is empty — set the router host:port or disable AX_ROUTER_ENABLE")
+			os.Exit(1)
+		}
 		rc, err := axrouter.NewHandler(axrouter.Config{
 			ServerAddr: *axRouterHost,
 			Token:      *axRouterToken,
@@ -211,6 +221,8 @@ func main() {
 				}
 			}()
 		}
+	} else if strings.TrimSpace(*axRouterHost) != "" {
+		log.Info("ax-router configured but disabled (set AX_ROUTER_ENABLE=true to connect)")
 	}
 
 	stop := make(chan os.Signal, 1)

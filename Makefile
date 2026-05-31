@@ -1,4 +1,4 @@
-.PHONY: all ui ui-deps run run-cluster build go-build \
+.PHONY: all ui ui-deps run run-router run-cluster build go-build \
         build-linux build-linux-amd64 build-linux-arm64 build-all \
         test clean \
         vendor docker-build docker-run \
@@ -69,16 +69,25 @@ build-all: build build-linux
 run: build
 	./discoveryd
 
+# Single node with the ax-router2 reverse router enabled. Set AX_ROUTER_HOST /
+# AX_ROUTER_TOKEN (and optionally AX_ROUTER_NAME) in .env first. The discovery
+# API is then reachable at https://<AX_ROUTER_NAME>.<router-base>.
+run-router: build
+	./discoveryd -ax-router
+
 # Two-node cluster on this machine. Open http://localhost:8500 and :8501.
+# Router is force-disabled (-ax-router=false): both nodes share .env, and
+# enabling it on each would make them fight over the same router service name.
+# Enable the router on a single node instead (see run-router).
 run-cluster: build
 	rm -f a.db b.db
 	(./bin/discoveryd \
 	    -listen :8500 -gossip-port 7946 \
-	    -node-id a -db a.db &) ; \
+	    -node-id a -db a.db -ax-router=false &) ; \
 	sleep 0.5 ; \
 	./bin/discoveryd \
 	    -listen :8501 -gossip-port 7947 \
-	    -node-id b -db b.db \
+	    -node-id b -db b.db -ax-router=false \
 	    -seeds 127.0.0.1:7946
 
 test:

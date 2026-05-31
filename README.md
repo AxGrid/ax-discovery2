@@ -107,7 +107,23 @@ on any glibc / musl distribution without further dependencies.
 make run-cluster
 ```
 
-Both UIs (`:8500`, `:8501`) show the same data.
+Both UIs (`:8500`, `:8501`) show the same data. The router is force-disabled in
+this mode (see below).
+
+### Expose through ax-router2 (optional)
+
+Off by default. Set `AX_ROUTER_ENABLE=true` plus `AX_ROUTER_HOST` /
+`AX_ROUTER_TOKEN` (and optionally `AX_ROUTER_NAME`) in `.env`, then:
+
+```bash
+make run-router          # single node with the reverse router connected
+```
+
+The API becomes reachable at `https://<AX_ROUTER_NAME>.<router-base>` without
+opening the service port. **Enable it on only one node** — every cluster node
+shares `.env` and ax-router is last-writer-wins per service name, so enabling it
+everywhere makes nodes fight over the name. `make run-cluster` passes
+`-ax-router=false` to guarantee it stays off there.
 
 ### Configuration
 
@@ -131,7 +147,8 @@ All flags also accept env vars (`DISCOVERY_*`). See `.env.example`.
 | `-corp-api-key` | `CORP_API_KEY` | (none) | per-service API key from corp-ui |
 | `-corp-slug` | `CORP_SERVICE_SLUG` | `discovery` | slug discovery is registered under in corp-ui |
 | `-corp-perm-key` | `CORP_PERM_KEY` | `discovery` | corp-ui permission key whose r/w/a gates discovery |
-| `-ax-router-host` | `AX_ROUTER_HOST` | (none) | optional ax-router2 reverse-router host; empty = no registration |
+| `-ax-router` | `AX_ROUTER_ENABLE` | `false` | expose the API through an ax-router2 reverse router (off by default) |
+| `-ax-router-host` | `AX_ROUTER_HOST` | (none) | router control `host:port` (default port 7000); required when enabled |
 | `-ax-router-token` | `AX_ROUTER_TOKEN` | (none) | ax-router2 shared token |
 | `-ax-router-name` | `AX_ROUTER_NAME` | `discovery` | service name to advertise on ax-router2 |
 | `-acme` | `DISCOVERY_ACME_ENABLE` | `false` | Enable automatic HTTPS via Let's Encrypt |
