@@ -27,7 +27,7 @@ permissions come from corp-ui's `is_admin` flag and the `perms` map.
 
 For the user-facing project description, see [`README.md`](README.md).
 The companion Go client library is its own repo at
-[`github.com/axgrid/discovery2-client`](https://github.com/axgrid/discovery2-client)
+[`github.com/axgrid/ax-discovery2-client`](https://github.com/axgrid/ax-discovery2-client)
 (local: `../discovery2-client`).
 
 ---
@@ -661,7 +661,7 @@ These are baked-in. Drop them and the design system breaks.
 ## Two-repo discipline
 
 The Go client library is **not** a sibling package in this module. It's a
-separate Go module at `github.com/axgrid/discovery2-client`. When wire types
+separate Go module at `github.com/axgrid/ax-discovery2-client`. When wire types
 change in `internal/model/types.go`, the corresponding fields must be updated
 in `discovery2-client/types.go` as well — these are duplicated on purpose so
 the client doesn't import server internals.

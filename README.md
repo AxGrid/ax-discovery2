@@ -10,7 +10,7 @@ binary — bbolt for state, no external DB.
 > variant, use `master`.
 
 The companion Go client library is its own repository:
-[github.com/axgrid/discovery2-client](https://github.com/axgrid/discovery2-client).
+[github.com/axgrid/ax-discovery2-client](https://github.com/axgrid/ax-discovery2-client).
 
 ![discovery2](screenshots/1.png)
 
@@ -309,14 +309,14 @@ the upstream `master` branch need to be re-owned.
 
 ## Go client
 
-Use the separate [discovery2-client](https://github.com/axgrid/discovery2-client) module:
+Use the separate [discovery2-client](https://github.com/axgrid/ax-discovery2-client) module:
 
 ```bash
-go get github.com/axgrid/discovery2-client
+go get github.com/axgrid/ax-discovery2-client
 ```
 
 ```go
-import discovery "github.com/axgrid/discovery2-client"
+import discovery "github.com/axgrid/ax-discovery2-client"
 
 d := discovery.New("http://disc1:8500,http://disc2:8500",
     discovery.WithToken("write-token"))
