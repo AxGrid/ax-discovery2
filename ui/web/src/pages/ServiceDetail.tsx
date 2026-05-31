@@ -4,6 +4,7 @@ import { ArrowLeft, Ban, Check, Copy, Hash, Lock, Plus, Settings, Trash2 } from 
 import { toast } from "sonner";
 import { api, CheckMode, CheckResponse, CorpUserHit, Instance, Interface, ProbeResult, Service, Visibility, watch } from "@/lib/api";
 import { StatusBadge } from "@/components/StatusBadge";
+import { ConfigScopeEditor } from "@/components/ConfigScopeEditor";
 import { useAuth } from "@/lib/auth";
 import { VisibilityBadge } from "./Services";
 import {
@@ -325,6 +326,21 @@ export default function ServiceDetail() {
           ))}
         </div>
       )}
+
+      <div className="mt-8">
+        <div className="flex items-center justify-between gap-2 mb-3">
+          <h2 className="text-sm uppercase tracking-wider text-fg-subtle">Configuration</h2>
+          <Link to="/config" className="text-xs text-fg-muted hover:text-fg">Open in Config →</Link>
+        </div>
+        <p className="text-xs text-fg-subtle mb-3">
+          Service-scoped variables. Effective config also layers in global and matching version blocks.
+        </p>
+        <ConfigScopeEditor
+          scope={{ kind: "service", service: name }}
+          readOnly={!canEdit}
+          onScopesChanged={() => { /* service page doesn't keep a scope list */ }}
+        />
+      </div>
     </div>
   );
 }
