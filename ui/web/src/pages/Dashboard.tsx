@@ -85,15 +85,17 @@ export default function Dashboard() {
         <Kpi icon={<Activity className="size-4" />} label="Requests/s" value={totals.rps.toFixed(1)} />
       </div>
 
-      {loading && aggs.length === 0 ? (
-        <div className="text-fg-muted">Loading…</div>
-      ) : aggs.length === 0 ? (
-        <Card><CardContent className="text-center text-fg-muted py-12">No services registered yet.</CardContent></Card>
-      ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
-          {aggs.map(a => <SvcCard key={a.name} agg={a} />)}
-        </div>
-      )}
+      <div className="mb-6">
+        {loading && aggs.length === 0 ? (
+          <div className="text-fg-muted">Loading…</div>
+        ) : aggs.length === 0 ? (
+          <Card><CardContent className="text-center text-fg-muted py-12">No services registered yet.</CardContent></Card>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {aggs.map(a => <SvcCard key={a.name} agg={a} />)}
+          </div>
+        )}
+      </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <LiveFeed feed={stats?.feed ?? []} />
