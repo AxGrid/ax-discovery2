@@ -315,6 +315,16 @@ is the only resolve path; the client just reads the merged map.
 ACL (`CanEditService`), falling back to any write-role when the service doesn't
 exist yet — so config can be **pre-provisioned before a service registers**.
 
+**Change-detection (ETag).** Each var's content hash is computed once at
+`ApplyConfig` (stored in `ConfigRevision.Hashes`) so big `bytes`/`json` values
+aren't re-hashed on read. `ResolveConfig` assembles a **query-scoped** ETag from
+the winning per-key hashes of exactly the resolved keys (changes iff *that*
+query's result changes). `GET /v1/config/resolve` sets the `ETag` header (+`etag`
+in JSON) and honours `If-None-Match`→304; `HEAD` returns just the ETag. The same
+`handleETag` helper + `discoverETag` (over id/address/version/weight/ifaces,
+excluding `LastHeartbeat` so it's stable across heartbeats) cover `/discover`.
+The Go client uses these for cheap polling + an offline-tolerant disk/DB cache.
+
 **Replication:** events `config.applied` (LWW: higher Revision, tie by
 UpdatedAt), `config.draft.saved/deleted`, `config.deleted`; anti-entropy
 snapshot carries all revisions + drafts. `applyConfigRemote` stores the revision

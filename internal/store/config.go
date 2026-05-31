@@ -1,6 +1,8 @@
 package store
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -12,6 +14,36 @@ import (
 	"github.com/axgrid/discovery2/internal/model"
 	"github.com/axgrid/discovery2/internal/semver"
 )
+
+func hashVars(vars map[string]model.TypedValue) map[string]string {
+	out := make(map[string]string, len(vars))
+	for k, v := range vars {
+		out[k] = model.HashValue(v)
+	}
+	return out
+}
+
+// configETag hashes the sorted (key, per-var hash) pairs of a resolved set —
+// cheap, never touches the (possibly large) values themselves.
+func configETag(vars map[string]model.TypedValue, winHash map[string]string) string {
+	keys := make([]string, 0, len(vars))
+	for k := range vars {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	h := sha256.New()
+	for _, k := range keys {
+		hash := winHash[k]
+		if hash == "" {
+			hash = model.HashValue(vars[k])
+		}
+		h.Write([]byte(k))
+		h.Write([]byte{0})
+		h.Write([]byte(hash))
+		h.Write([]byte{0})
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
 
 // Config storage layout in the bktConfig bucket (all keys are byte strings):
 //
@@ -144,7 +176,7 @@ func (s *Store) ApplyConfig(scope model.ConfigScope, vars map[string]model.Typed
 			}
 		}
 		rev = model.ConfigRevision{
-			Scope: scope, Revision: next, Vars: vars,
+			Scope: scope, Revision: next, Vars: vars, Hashes: hashVars(vars),
 			Note: note, Author: author, CreatedAt: now, UpdatedAt: now,
 		}
 		buf, err := json.Marshal(&rev)
@@ -266,6 +298,7 @@ func (s *Store) DeleteConfigScope(scope model.ConfigScope) error {
 func (s *Store) ResolveConfig(service, version string, prefixes, keys []string) (*model.ResolvedConfig, error) {
 	out := map[string]model.TypedValue{}
 	prov := map[string]string{}
+	winHash := map[string]string{}
 	overlay := func(scope model.ConfigScope) {
 		rev, err := s.GetActiveConfig(scope)
 		if err != nil {
@@ -274,6 +307,11 @@ func (s *Store) ResolveConfig(service, version string, prefixes, keys []string) 
 		for k, v := range rev.Vars {
 			out[k] = v
 			prov[k] = scope.ID()
+			if rev.Hashes != nil {
+				winHash[k] = rev.Hashes[k]
+			} else {
+				winHash[k] = model.HashValue(v)
+			}
 		}
 	}
 
@@ -307,7 +345,10 @@ func (s *Store) ResolveConfig(service, version string, prefixes, keys []string) 
 	if len(prefixes) > 0 || len(keys) > 0 {
 		out, prov = filterConfig(out, prov, prefixes, keys)
 	}
-	return &model.ResolvedConfig{Service: service, Version: version, Vars: out, Provenance: prov}, nil
+	return &model.ResolvedConfig{
+		Service: service, Version: version, Vars: out, Provenance: prov,
+		ETag: configETag(out, winHash),
+	}, nil
 }
 
 // versionScopes lists every version-scope of a service that has a published revision.

@@ -22,6 +22,7 @@ import (
 
 func (s *Server) routesConfig(api *http.ServeMux) {
 	api.HandleFunc("GET /v1/config/resolve", s.configResolve)
+	api.HandleFunc("HEAD /v1/config/resolve", s.configResolve)
 	api.HandleFunc("GET /v1/config/scopes", s.configScopes)
 	api.HandleFunc("GET /v1/config/scope", s.configGetScope)
 	api.HandleFunc("POST /v1/config/apply", s.configApply)
@@ -43,6 +44,9 @@ func (s *Server) configResolve(w http.ResponseWriter, r *http.Request) {
 	res, err := s.store.ResolveConfig(service, version, q["prefix"], q["key"])
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	if handleETag(w, r, res.ETag) {
 		return
 	}
 	writeJSON(w, http.StatusOK, res)

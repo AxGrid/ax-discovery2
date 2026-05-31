@@ -1,13 +1,26 @@
 package model
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
 )
+
+// HashValue returns a stable content hash of a typed value (sha256 of
+// type + value). Computed once at write time and stored on the revision so
+// large bytes/json values aren't re-hashed on every read.
+func HashValue(v TypedValue) string {
+	h := sha256.New()
+	h.Write([]byte(v.Type))
+	h.Write([]byte{0})
+	h.Write(v.Value)
+	return hex.EncodeToString(h.Sum(nil))
+}
 
 // VarType tags the concrete type of a config value so the UI can render the
 // right editor and clients can decode without guessing.
@@ -137,13 +150,17 @@ func (s *ConfigScope) Validate() error {
 // ConfigRevision is one applied snapshot of a scope's full variable set. The
 // active revision is what clients read; older ones live in history for rollback.
 type ConfigRevision struct {
-	Scope     ConfigScope           `json:"scope"`
-	Revision  int                   `json:"revision"`
-	Vars      map[string]TypedValue `json:"vars"`
-	Note      string                `json:"note,omitempty"`
-	Author    string                `json:"author,omitempty"`
-	CreatedAt time.Time             `json:"createdAt"`
-	UpdatedAt time.Time             `json:"updatedAt"` // drives last-write-wins replication
+	Scope    ConfigScope           `json:"scope"`
+	Revision int                   `json:"revision"`
+	Vars     map[string]TypedValue `json:"vars"`
+	// Hashes is the per-key content hash (HashValue), computed at apply time so
+	// the resolve ETag can be assembled without re-hashing big values. Internal
+	// metadata — clients use the aggregate ETag, not these.
+	Hashes    map[string]string `json:"hashes,omitempty"`
+	Note      string            `json:"note,omitempty"`
+	Author    string            `json:"author,omitempty"`
+	CreatedAt time.Time         `json:"createdAt"`
+	UpdatedAt time.Time         `json:"updatedAt"` // drives last-write-wins replication
 }
 
 // ConfigDraft is an unpublished working set for a scope — saved so edits aren't
@@ -165,6 +182,9 @@ type ResolvedConfig struct {
 	Version    string                `json:"version,omitempty"`
 	Vars       map[string]TypedValue `json:"vars"`
 	Provenance map[string]string     `json:"provenance,omitempty"` // key -> scope ID that won
+	// ETag is an aggregate hash over exactly the resolved keys (each key's
+	// winning per-var hash). Changes iff this query's effective result changes.
+	ETag string `json:"etag,omitempty"`
 }
 
 // Config event types (replicated like service/instance events).

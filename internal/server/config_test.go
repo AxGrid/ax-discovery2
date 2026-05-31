@@ -32,8 +32,14 @@ func newTestServerTokens(t *testing.T, write, admin string) (*httptest.Server, *
 	return srv, st
 }
 
-func sv(s string) model.TypedValue { b, _ := json.Marshal(s); return model.TypedValue{Type: model.VarString, Value: b} }
-func iv(n int) model.TypedValue    { b, _ := json.Marshal(n); return model.TypedValue{Type: model.VarInt, Value: b} }
+func sv(s string) model.TypedValue {
+	b, _ := json.Marshal(s)
+	return model.TypedValue{Type: model.VarString, Value: b}
+}
+func iv(n int) model.TypedValue {
+	b, _ := json.Marshal(n)
+	return model.TypedValue{Type: model.VarInt, Value: b}
+}
 
 func doJSON(t *testing.T, method, url, token string, body any) (int, []byte) {
 	t.Helper()

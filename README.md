@@ -228,7 +228,7 @@ POST   /v1/services/{name}/grants                   # body: {"userId":"..."}
 DELETE /v1/services/{name}/grants/{userId}
 
 # Discovery & cluster
-GET    /v1/discover/{name}                          # "up" instances; ?version=>=2.1.0 semver filter
+GET    /v1/discover/{name}                          # "up" instances; ?version=>=2.1.0 semver filter (+ETag; HEAD / 304)
 GET    /v1/discover/{name}?format=addr&iface=WEB    # flat ["host:port", ...] list
 GET    /v1/discover/{name}/pick                     # one instance (weighted); &token=… for sticky
 GET    /v1/discover?tag=foo                         # "up" instances across services with a tag
@@ -239,7 +239,7 @@ GET    /v1/stats                                    # live per-service rps, requ
 GET    /v1/watch                                    # WebSocket → DiscoveryEvent
 
 # Config store (scope = {kind, service?, constraint?} in the body for writes)
-GET    /v1/config/resolve?service=&version=&prefix=&key=   # merged effective config
+GET    /v1/config/resolve?service=&version=&prefix=&key=   # merged effective config (+ETag; HEAD / If-None-Match→304)
 GET    /v1/config/scopes                                   # all scopes + var counts
 GET    /v1/config/scope?kind=&service=&constraint=&include=draft,history
 POST   /v1/config/apply                                    # publish a new revision (block-atomic)

@@ -1,10 +1,13 @@
 package server
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"math/rand/v2"
 	"net"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -12,6 +15,25 @@ import (
 	"github.com/axgrid/discovery2/internal/semver"
 	"github.com/axgrid/discovery2/internal/stats"
 )
+
+// discoverETag hashes the discoverable projection of an instance set (id,
+// address, version, weight, interfaces) — stable across heartbeats (LastHeartbeat
+// is excluded), changing only when the pool meaningfully changes. Used for
+// HEAD / If-None-Match (304) so clients poll cheaply.
+func discoverETag(insts []model.Instance) string {
+	sorted := append([]model.Instance(nil), insts...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].ID < sorted[j].ID })
+	h := sha256.New()
+	for i := range sorted {
+		in := &sorted[i]
+		fmt.Fprintf(h, "%s\x00%s\x00%s\x00%d\x00", in.ID, in.Address, in.Version, in.Weight)
+		for _, it := range in.Interfaces {
+			fmt.Fprintf(h, "%s:%d:%s:%t;", it.Name, it.Port, it.Protocol, it.TLS)
+		}
+		h.Write([]byte{0})
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
 
 const defaultAffinityTTL = 20 * time.Minute
 

@@ -294,7 +294,9 @@ func (s *Server) routes(mux *http.ServeMux) {
 
 	// Discovery + cluster + watch
 	api.HandleFunc("GET /v1/discover", s.discoverByTag)
+	api.HandleFunc("HEAD /v1/discover", s.discoverByTag)
 	api.HandleFunc("GET /v1/discover/{name}", s.discover)
+	api.HandleFunc("HEAD /v1/discover/{name}", s.discover)
 	api.HandleFunc("GET /v1/discover/{name}/pick", s.discoverPick)
 	api.HandleFunc("GET /v1/cluster/members", s.clusterMembers)
 	api.HandleFunc("POST /v1/cluster/join", s.clusterJoin)
@@ -850,6 +852,9 @@ func (s *Server) discover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := upInstances(insts, constraint)
+	if handleETag(w, r, discoverETag(out)) {
+		return // HEAD or unchanged (304) — skip the body and the stats record
+	}
 	s.stats.Record(stats.Lookup{
 		Client:  clientName(r),
 		Service: name,
@@ -889,6 +894,9 @@ func (s *Server) discoverByTag(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		out = append(out, upInstances(insts, constraint)...)
+	}
+	if handleETag(w, r, discoverETag(out)) {
+		return
 	}
 	s.stats.Record(stats.Lookup{
 		Client:  clientName(r),
@@ -1059,6 +1067,37 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 
 func writeErr(w http.ResponseWriter, code int, err error) {
 	writeJSON(w, code, map[string]string{"error": err.Error()})
+}
+
+// handleETag sets the ETag header and short-circuits the response when the
+// caller already has the current version (If-None-Match → 304) or only wants
+// the hash (HEAD → 200, no body). Returns true when it has written the response
+// and the caller should return without a body.
+func handleETag(w http.ResponseWriter, r *http.Request, etag string) bool {
+	w.Header().Set("ETag", `"`+etag+`"`)
+	if inm := r.Header.Get("If-None-Match"); inm != "" && etagMatches(inm, etag) {
+		w.WriteHeader(http.StatusNotModified)
+		return true
+	}
+	if r.Method == http.MethodHead {
+		w.WriteHeader(http.StatusOK)
+		return true
+	}
+	return false
+}
+
+// etagMatches compares an If-None-Match header (possibly a comma list of quoted
+// / weak tags, or "*") against our bare hex etag.
+func etagMatches(ifNoneMatch, etag string) bool {
+	for _, part := range strings.Split(ifNoneMatch, ",") {
+		p := strings.TrimSpace(part)
+		p = strings.TrimPrefix(p, "W/")
+		p = strings.Trim(p, `"`)
+		if p == "*" || p == etag {
+			return true
+		}
+	}
+	return false
 }
 
 func withCORS(next http.Handler) http.Handler {
