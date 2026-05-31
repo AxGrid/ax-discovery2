@@ -147,12 +147,3 @@ export function loadCorpSDK(): Promise<CorpReadyResult> {
   return sdkPromise;
 }
 
-// applyCorpTheme syncs the host theme into discovery's ax-styler theme
-// attribute. The host emits theme changes via onTheme; we mirror them
-// onto <html data-theme>.
-export function applyCorpTheme(theme: string | undefined) {
-  if (!theme) return;
-  if (theme === "light" || theme === "dark") {
-    document.documentElement.setAttribute("data-theme", theme);
-  }
-}

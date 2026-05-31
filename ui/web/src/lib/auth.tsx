@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { api, Me, setBearerToken } from "./api";
-import { applyCorpTheme, isIframe, loadCorpSDK } from "./corp";
+import { isIframe, loadCorpSDK } from "./corp";
 
 type Mode = "standalone" | "iframe";
 
@@ -41,11 +41,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           const r = await loadCorpSDK();
           if (cancelled) return;
           setBearerToken(r.token);
-          applyCorpTheme(r.theme);
           // Wire token refresh so long-lived tabs survive token rotation
           // without the user having to reload.
           window.CorpSDK?.onTokenRefresh?.((t) => setBearerToken(t));
-          window.CorpSDK?.onTheme?.(applyCorpTheme);
           setMode("iframe");
         } catch {
           // Fall back to standalone — maybe the user opened the iframe
