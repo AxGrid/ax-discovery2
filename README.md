@@ -38,6 +38,11 @@ The companion Go client library is its own repository:
 - **Operator block.** Take an instance out of rotation with one click to
   rebalance traffic — without deleting it, and surviving the owning client's
   re-registration.
+- **Config store.** Cluster-replicated variables & settings with typed values
+  (string/int/float/bool/json/bytes), block-atomic versioning + rollback, and
+  `global < service < version` resolution. Edit in the **Config** UI tab.
+- **Dynamic client tokens.** Mint revocable read/write/admin bearer tokens from
+  the UI (no env edit / restart) — visible to write/admin only.
 - **Live dashboard + Prometheus metrics.** A service-card dashboard shows
   per-version health, request rate (sparkline), a live lookup feed, and which
   clients call which services. `/metrics` exposes `discovery_up{service,version}`
@@ -216,12 +221,38 @@ GET    /v1/health
 GET    /v1/stats                                    # live per-service rps, request feed, clients (dashboard)
 GET    /v1/watch                                    # WebSocket → DiscoveryEvent
 
+# Config store (scope = {kind, service?, constraint?} in the body for writes)
+GET    /v1/config/resolve?service=&version=&prefix=&key=   # merged effective config
+GET    /v1/config/scopes                                   # all scopes + var counts
+GET    /v1/config/scope?kind=&service=&constraint=&include=draft,history
+POST   /v1/config/apply                                    # publish a new revision (block-atomic)
+POST   /v1/config/draft                                    # save an unpublished draft
+DELETE /v1/config/draft
+POST   /v1/config/rollback                                 # body: {scope, revision}
+DELETE /v1/config/scope
+
+# Dynamic client tokens (write/admin only; no role escalation)
+GET    /v1/client-tokens
+POST   /v1/client-tokens                                   # body: {name, role}
+DELETE /v1/client-tokens/{id}
+
 # Metrics — open (no auth), Prometheus text format, cluster-wide
 GET    /metrics
 
 # Audit (admin only — users themselves live in corp-ui)
 GET    /v1/audit?limit=N&service=NAME
 ```
+
+### Config store
+
+A built-in, cluster-replicated KV/config store with three **scopes**: `global`,
+`service:<name>`, and `version:<name>:<constraint>` (npm-style semver). Keys are
+flat with `/` prefixes; values are **typed** (`string/int/float/bool/json/bytes`).
+Edits are **block-atomic with history**: applying replaces a scope's whole var
+set as a new revision; you can roll back to any past revision. Clients read the
+**merged effective config** (`global < service < version`, higher version-floor
+wins) via `/v1/config/resolve`. Config can be **pre-provisioned before a service
+registers**. Edit it all in the **Config** UI tab.
 
 ### Versions, balancing & metrics
 

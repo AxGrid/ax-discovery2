@@ -48,11 +48,15 @@ cmd/discoveryd/main.go             # entrypoint; loads .env, builds corp.Client,
 internal/
 ├── model/types.go                 # all wire types: Service, Instance, Interface, Session,
 │                                  # AuditEntry, Event, Visibility, Status; constants. NO local User type.
+├── model/config.go                # config store types: VarType, TypedValue, ConfigScope, ConfigRevision, ConfigDraft
+├── model/token.go                 # ClientToken (UI-minted s2s tokens)
 ├── store/                         # bbolt persistence + in-memory pub/sub (events fan-out)
 │   ├── bolt.go                    # Open/Close, services + instances, Subscriber/emit, Snapshot, ApplyRemote, SetBlocked
 │   ├── rename.go                  # RenameService (atomic move of service + all instances)
 │   ├── sessions.go                # PutSession/GetSession/DeleteSession/SweepExpiredSessions (browser sessions only)
 │   ├── affinity.go                # sticky-token bindings (PutAffinity/GetAffinity/Sweep), replicated
+│   ├── config.go                  # config store: Apply/History/Rollback/Draft/Resolve, replicated
+│   ├── tokens.go                  # dynamic client tokens (key=secret for O(1) auth), replicated
 │   └── audit.go                   # AppendAudit/ListAudit (timestamp-keyed, reverse cursor)
 ├── semver/semver.go               # Masterminds/semver wrapper: Match/Valid/ValidConstraint (npm-style)
 ├── stats/stats.go                 # node-local lookup collector: per-service rps/sparkline, feed, clients
@@ -66,6 +70,8 @@ internal/
 └── server/
     ├── server.go                  # Run(), routes(), service/instance/discover/watch handlers, CORS, loginLimiter
     ├── discover_pick.go           # version-filtered discover, format=addr, weighted + sticky-token pick
+    ├── config_handlers.go         # /v1/config/{resolve,scopes,scope,apply,draft,rollback,scope} (scope in body)
+    ├── client_token_handlers.go   # /v1/client-tokens CRUD (write/admin; no role escalation)
     ├── observability_handlers.go  # block/unblock, GET /v1/stats, open Prometheus GET /metrics
     ├── hub.go                     # WebSocket fan-out for /v1/watch
     ├── auth_handlers.go           # /v1/auth/{login,logout,me}, /v1/corp/users/search,
@@ -256,6 +262,55 @@ replicated store): `discovery_up{service,version}` (materialised to 0 for any
 (service,version) with no live instance — easy `==0` alarm), `discovery_instances{service,status}`,
 `discovery_blocked{service}`, `discovery_requests_total{service,kind}` (node-local),
 `discovery_cluster_nodes`.
+
+### Config store (variables & settings)
+
+A built-in KV/config store, replicated like everything else. Three **scopes**
+(containers): `global`, `service:<name>`, `version:<name>:<constraint>` (semver,
+same dialect as instance versions). Keys are flat with `/`-style prefixes
+(etcd-like); the tree is just a UI view. Values are **typed** (`TypedValue{Type,
+Value}`) — string/int/float/bool/json/bytes (bytes = base64), validated on write
+(`model/config.go`, 1 MiB cap).
+
+**Versioning is block-atomic with history.** Each scope is a versioned document:
+`ApplyConfig` publishes the whole var set as a new `ConfigRevision` (allocates
+`Revision = prev+1`, records history, clears draft). The **active** revision is
+what clients read. `RollbackConfig(rev)` re-applies an old revision's vars as a
+new revision (so rollback replicates like any apply). Optional per-scope
+**draft** (`PutDraft`) holds unpublished edits. Storage keys in the `config`
+bucket: `active/<scopeID>`, `rev/<scopeID>/<NNNN>`, `draft/<scopeID>` — scopeID
+is `ConfigScope.ID()`, opaque (never parsed back; the scope is embedded in the
+value).
+
+**Resolution** (`ResolveConfig(service, version, prefixes, keys)`) merges
+**global < service < version** into one flat map. Among matching version blocks
+the higher constraint **floor** wins (`>=2.1.0` beats `>=2.0.0` for a 2.1.0
+instance — `semver.Floor`). Returns provenance (which scope won each key). This
+is the only resolve path; the client just reads the merged map.
+
+**ACL** (`allowConfigWrite`): `global` → admin; `service`/`version` → service
+ACL (`CanEditService`), falling back to any write-role when the service doesn't
+exist yet — so config can be **pre-provisioned before a service registers**.
+
+**Replication:** events `config.applied` (LWW: higher Revision, tie by
+UpdatedAt), `config.draft.saved/deleted`, `config.deleted`; anti-entropy
+snapshot carries all revisions + drafts. `applyConfigRemote` stores the revision
+in history and advances active when newer (`putConfigRevisionRaw`).
+
+### Dynamic client tokens
+
+Runtime-minted s2s bearer tokens (`model/token.go`, `store/tokens.go`),
+complementing the static `DISCOVERY_*_TOKENS` env tokens. Stored **in the clear**
+(an operator choice — re-displayable/copyable in the UI; pair with
+`DISCOVERY_GOSSIP_SECRET`) keyed by the secret itself for O(1) auth lookup. The
+resolver checks them in `identity.go` **after** static env tokens, **before**
+the iframe JWT path; a hit yields `Identity{System:true, Role}`.
+
+Endpoints (`/v1/client-tokens`) are gated by `requireWrite` — **read-only callers
+can't even list tokens** — and you **cannot mint a token with a role above your
+own** (no privilege escalation). Tokens are non-expiring; revoke by ID. Secret
+format: `dsc_<base64url(24 random bytes)>`. Replicated via `token.upserted` /
+`token.deleted` (LWW on UpdatedAt) + snapshot.
 
 ### Managed instances
 

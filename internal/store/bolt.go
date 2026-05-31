@@ -14,11 +14,13 @@ import (
 )
 
 var (
-	bktServices  = []byte("services")
-	bktInstances = []byte("instances")
-	bktSessions  = []byte("sessions")
-	bktAffinity  = []byte("affinity") // key: service + "/" + token (sticky load-balancing bindings)
-	bktAudit     = []byte("audit")    // key: timestamp_unix_nano + "/" + uuid (sorted ascending)
+	bktServices     = []byte("services")
+	bktInstances    = []byte("instances")
+	bktSessions     = []byte("sessions")
+	bktAffinity     = []byte("affinity")      // key: service + "/" + token (sticky load-balancing bindings)
+	bktConfig       = []byte("config")        // key: active/<scope> | rev/<scope>/<n> | draft/<scope>
+	bktClientTokens = []byte("client_tokens") // key: token secret → ClientToken
+	bktAudit        = []byte("audit")         // key: timestamp_unix_nano + "/" + uuid (sorted ascending)
 
 	ErrNotFound = errors.New("not found")
 	ErrConflict = errors.New("conflict")
@@ -46,7 +48,7 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("open bbolt: %w", err)
 	}
 	err = db.Update(func(tx *bolt.Tx) error {
-		for _, b := range [][]byte{bktServices, bktInstances, bktSessions, bktAffinity, bktAudit} {
+		for _, b := range [][]byte{bktServices, bktInstances, bktSessions, bktAffinity, bktConfig, bktClientTokens, bktAudit} {
 			if _, err := tx.CreateBucketIfNotExists(b); err != nil {
 				return err
 			}
@@ -461,9 +463,12 @@ func (s *Store) DeleteInstance(service, id string) error {
 
 // Snapshot returns the full current state for cluster sync.
 type Snapshot struct {
-	Services  []model.Service  `json:"services"`
-	Instances []model.Instance `json:"instances"`
-	Affinity  []model.Affinity `json:"affinity,omitempty"`
+	Services     []model.Service        `json:"services"`
+	Instances    []model.Instance       `json:"instances"`
+	Affinity     []model.Affinity       `json:"affinity,omitempty"`
+	ConfigRevs   []model.ConfigRevision `json:"configRevs,omitempty"`
+	ConfigDrafts []model.ConfigDraft    `json:"configDrafts,omitempty"`
+	ClientTokens []model.ClientToken    `json:"clientTokens,omitempty"`
 }
 
 func (s *Store) Snapshot() (*Snapshot, error) {
@@ -479,7 +484,18 @@ func (s *Store) Snapshot() (*Snapshot, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Snapshot{Services: svcs, Instances: insts, Affinity: affs}, nil
+	revs, drafts, err := s.configSnapshot()
+	if err != nil {
+		return nil, err
+	}
+	toks, err := s.clientTokenSnapshot()
+	if err != nil {
+		return nil, err
+	}
+	return &Snapshot{
+		Services: svcs, Instances: insts, Affinity: affs,
+		ConfigRevs: revs, ConfigDrafts: drafts, ClientTokens: toks,
+	}, nil
 }
 
 // ApplyRemote merges a remote event into local state.
@@ -527,6 +543,11 @@ func (s *Store) ApplyRemote(ev model.Event) error {
 			return err
 		}
 		return s.deleteAffinityRaw(a.ServiceName, a.Token, ev)
+	case model.EventConfigApplied, model.EventConfigDraftSaved,
+		model.EventConfigDraftDeleted, model.EventConfigDeleted:
+		return s.applyConfigRemote(ev)
+	case model.EventTokenUpserted, model.EventTokenDeleted:
+		return s.applyTokenRemote(ev)
 	}
 	return nil
 }

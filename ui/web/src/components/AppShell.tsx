@@ -5,7 +5,7 @@ import {
   Avatar, AvatarFallback, Button, ThemeToggle,
   Tooltip, TooltipContent, TooltipTrigger,
 } from "@/components/ui";
-import { FileText, Info, KeyRound, LayoutDashboard, Layers, LogOut, Network } from "lucide-react";
+import { FileText, Info, KeyRound, LayoutDashboard, Layers, LogOut, Network, SlidersHorizontal } from "lucide-react";
 
 // AppShell renders a top bar instead of a sidebar. The reasoning:
 //
@@ -58,6 +58,7 @@ function TopBar({ me, logout, mode }: {
         <nav className="flex flex-wrap items-center gap-1 min-w-0 flex-1">
           <NavItem to="/" end icon={<LayoutDashboard className="size-4" />}>Dashboard</NavItem>
           <NavItem to="/services" icon={<Layers className="size-4" />}>Services</NavItem>
+          <NavItem to="/config" icon={<SlidersHorizontal className="size-4" />}>Config</NavItem>
           <NavItem to="/cluster" icon={<Network className="size-4" />}>Cluster</NavItem>
           <NavItem to="/tokens" icon={<KeyRound className="size-4" />}>Tokens</NavItem>
           {me?.isAdmin && (

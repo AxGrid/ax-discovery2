@@ -2,6 +2,7 @@ import { BrowserRouter, Route, Routes, Navigate, useLocation } from "react-route
 import { AppShell } from "./components/AppShell";
 import Dashboard from "./pages/Dashboard";
 import Services from "./pages/Services";
+import Config from "./pages/Config";
 import ServiceDetail from "./pages/ServiceDetail";
 import Cluster from "./pages/Cluster";
 import About from "./pages/About";
@@ -37,6 +38,7 @@ export default function App() {
           <Route index element={<Dashboard />} />
           <Route path="/services" element={<Services />} />
           <Route path="/services/:name" element={<ServiceDetail />} />
+          <Route path="/config" element={<Config />} />
           <Route path="/cluster" element={<Cluster />} />
           <Route path="/tokens" element={<Tokens />} />
           <Route path="/audit" element={<RequireAdmin><Audit /></RequireAdmin>} />

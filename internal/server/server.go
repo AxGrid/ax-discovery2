@@ -308,6 +308,12 @@ func (s *Server) routes(mux *http.ServeMux) {
 	// Static service tokens, gated by caller's role.
 	api.HandleFunc("GET /v1/tokens", s.listTokens)
 
+	// Config store (KV / versioned / per-service / per-version)
+	s.routesConfig(api)
+
+	// Dynamic client tokens (write/admin only)
+	s.routesClientTokens(api)
+
 	// Audit (admin)
 	api.HandleFunc("GET /v1/audit", s.listAudit)
 

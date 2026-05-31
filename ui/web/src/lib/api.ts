@@ -190,6 +190,83 @@ export interface StatsSnapshot {
   generatedAt: string;
 }
 
+// --- config store ---
+
+export type VarType = "string" | "int" | "float" | "bool" | "json" | "bytes";
+
+// value is the raw JSON value: a string for string/bytes(base64), number for
+// int/float, boolean for bool, or any JSON for json.
+export interface TypedValue {
+  type: VarType;
+  value: any;
+}
+
+export type ScopeKind = "global" | "service" | "version";
+
+export interface ConfigScope {
+  kind: ScopeKind;
+  service?: string;
+  constraint?: string;
+}
+
+export interface ConfigRevision {
+  scope: ConfigScope;
+  revision: number;
+  vars: Record<string, TypedValue>;
+  note?: string;
+  author?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ConfigDraft {
+  scope: ConfigScope;
+  vars: Record<string, TypedValue>;
+  baseRevision: number;
+  author?: string;
+  updatedAt: string;
+}
+
+export interface ConfigScopeSummary {
+  scope: ConfigScope;
+  revision: number;
+  varCount: number;
+  hasDraft: boolean;
+  updatedAt: string;
+}
+
+export interface ConfigScopeResponse {
+  scope: ConfigScope;
+  active?: ConfigRevision;
+  draft?: ConfigDraft;
+  history?: ConfigRevision[];
+}
+
+export interface ResolvedConfig {
+  service: string;
+  version?: string;
+  vars: Record<string, TypedValue>;
+  provenance?: Record<string, string>;
+}
+
+export function scopeId(s: ConfigScope): string {
+  if (s.kind === "global") return "global";
+  if (s.kind === "service") return `service:${s.service}`;
+  return `version:${s.service}:${s.constraint}`;
+}
+
+// --- client tokens ---
+
+export interface ClientToken {
+  id: string;
+  token: string;
+  name: string;
+  role: "read" | "write" | "admin";
+  createdAt: string;
+  createdBy?: string;
+  updatedAt: string;
+}
+
 export class ApiError extends Error {
   status: number;
   constructor(msg: string, status: number) {
@@ -281,6 +358,40 @@ export const api = {
   members: () => req<string[]>("GET", "/v1/cluster/members"),
   joinCluster: (seeds: string[]) =>
     req<{ contacted: number; members: string[] }>("POST", "/v1/cluster/join", { seeds }),
+
+  // config store
+  configScopes: () => req<ConfigScopeSummary[]>("GET", "/v1/config/scopes"),
+  configGetScope: (scope: ConfigScope, include?: string) => {
+    const q = new URLSearchParams({ kind: scope.kind });
+    if (scope.service) q.set("service", scope.service);
+    if (scope.constraint) q.set("constraint", scope.constraint);
+    if (include) q.set("include", include);
+    return req<ConfigScopeResponse>("GET", `/v1/config/scope?${q.toString()}`);
+  },
+  configResolve: (service: string, version?: string, prefixes?: string[]) => {
+    const q = new URLSearchParams();
+    if (service) q.set("service", service);
+    if (version) q.set("version", version);
+    (prefixes ?? []).forEach(p => q.append("prefix", p));
+    return req<ResolvedConfig>("GET", `/v1/config/resolve?${q.toString()}`);
+  },
+  configApply: (scope: ConfigScope, vars: Record<string, TypedValue>, note?: string) =>
+    req<ConfigRevision>("POST", "/v1/config/apply", { scope, vars, note }),
+  configSaveDraft: (scope: ConfigScope, vars: Record<string, TypedValue>) =>
+    req<ConfigDraft>("POST", "/v1/config/draft", { scope, vars }),
+  configDeleteDraft: (scope: ConfigScope) =>
+    req<void>("DELETE", "/v1/config/draft", { scope }),
+  configRollback: (scope: ConfigScope, revision: number) =>
+    req<ConfigRevision>("POST", "/v1/config/rollback", { scope, revision }),
+  configDeleteScope: (scope: ConfigScope) =>
+    req<void>("DELETE", "/v1/config/scope", { scope }),
+
+  // client tokens (write/admin only)
+  listClientTokens: () => req<ClientToken[]>("GET", "/v1/client-tokens"),
+  createClientToken: (name: string, role: string) =>
+    req<ClientToken>("POST", "/v1/client-tokens", { name, role }),
+  revokeClientToken: (id: string) =>
+    req<void>("DELETE", `/v1/client-tokens/${encodeURIComponent(id)}`),
 };
 
 export function watch(onEvent: (ev: DiscoveryEvent) => void): () => void {

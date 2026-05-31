@@ -32,6 +32,20 @@ func (r Role) String() string {
 	return "none"
 }
 
+// RoleFromString parses "read"/"write"/"admin" (case-insensitive) into a Role.
+// Anything else is RoleNone.
+func RoleFromString(s string) Role {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "read":
+		return RoleRead
+	case "write":
+		return RoleWrite
+	case "admin":
+		return RoleAdmin
+	}
+	return RoleNone
+}
+
 type Config struct {
 	// If true, requests without a token are allowed with RoleRead.
 	AllowAnonymousRead bool

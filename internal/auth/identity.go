@@ -133,6 +133,15 @@ func (r *Resolver) Resolve(req *http.Request) Identity {
 		if role := r.authenticator.Resolve(token); role != RoleNone {
 			return Identity{System: true, Role: role}
 		}
+		// Dynamic client tokens minted via the UI (store-backed). Checked after
+		// the static env tokens so an env token can't be shadowed.
+		if r.store != nil {
+			if ct, err := r.store.GetClientToken(token); err == nil {
+				if role := RoleFromString(ct.Role); role != RoleNone {
+					return Identity{System: true, Role: role}
+				}
+			}
+		}
 		if r.corp.Client != nil {
 			if user, err := r.corp.Client.Introspect(req.Context(), token); err == nil {
 				return IdentityFromCorp(user, r.corp.ServiceSlug, r.corp.PermKey)

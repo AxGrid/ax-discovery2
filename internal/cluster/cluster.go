@@ -308,6 +308,32 @@ func (c *Cluster) pullSnapshot(ctx context.Context, peerAPI string) error {
 		}
 		_ = c.store.ApplyRemote(ev)
 	}
+	for i := range snap.ConfigRevs {
+		ev := model.Event{
+			Type:     model.EventConfigApplied,
+			Service:  snap.ConfigRevs[i].Scope.Service,
+			Payload:  &snap.ConfigRevs[i],
+			OriginID: "snapshot",
+		}
+		_ = c.store.ApplyRemote(ev)
+	}
+	for i := range snap.ConfigDrafts {
+		ev := model.Event{
+			Type:     model.EventConfigDraftSaved,
+			Service:  snap.ConfigDrafts[i].Scope.Service,
+			Payload:  &snap.ConfigDrafts[i],
+			OriginID: "snapshot",
+		}
+		_ = c.store.ApplyRemote(ev)
+	}
+	for i := range snap.ClientTokens {
+		ev := model.Event{
+			Type:     model.EventTokenUpserted,
+			Payload:  &snap.ClientTokens[i],
+			OriginID: "snapshot",
+		}
+		_ = c.store.ApplyRemote(ev)
+	}
 	return nil
 }
 

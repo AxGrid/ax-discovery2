@@ -47,6 +47,28 @@ func Match(version, constraint string) (bool, error) {
 	return c.Check(v), nil
 }
 
+// Floor returns the lowest version token mentioned in a constraint expression
+// (e.g. ">=2.1.0" → "2.1.0", "1.2.0 - 1.3.5" → "1.2.0", "^2.1" → "2.1"). It's
+// used to order overlapping version blocks during config resolution — the block
+// with the higher floor wins. Returns "" when nothing parses.
+func Floor(constraint string) string {
+	toks := strings.FieldsFunc(constraint, func(r rune) bool {
+		// keep version-ish runes together; split on operators/space/commas.
+		return !(r == '.' || r == '+' || r == '-' || (r >= '0' && r <= '9') ||
+			(r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z'))
+	})
+	best := ""
+	for _, t := range toks {
+		if _, err := mm.NewVersion(t); err != nil {
+			continue
+		}
+		if best == "" || Compare(t, best) < 0 {
+			best = t
+		}
+	}
+	return best
+}
+
 // Compare returns -1, 0, or +1 if a is less than, equal to, or greater than b.
 // Both must be valid versions; invalid versions sort last (treated as lowest).
 func Compare(a, b string) int {
