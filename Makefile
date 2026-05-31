@@ -97,9 +97,10 @@ clean:
 	rm -rf bin ui/dist ui/web/node_modules ./discoveryd
 
 # --- Kamal deploy --------------------------------------------------------
-# vendor regenerates ./vendor/ so the Docker build can resolve the local
-# replace directive for github.com/corp-ui/corp-ui/sdk/go. The directory
-# is gitignored; rerun whenever go.mod or the corp-ui SDK changes.
+# vendor regenerates ./vendor/ so the Docker build (`-mod=vendor`) can resolve
+# the local replace for github.com/corp-ui/corp-ui/sdk/go (../corp-ui/sdk/go),
+# which isn't fetchable from a proxy. The vendor tree IS committed — rerun this
+# and commit the delta whenever go.mod or the corp-ui SDK changes.
 vendor:
 	go mod vendor
 

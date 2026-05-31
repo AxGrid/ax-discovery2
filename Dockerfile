@@ -5,9 +5,10 @@
 #   1. ui    — node 22 builds the React UI bundle into ui/dist
 #   2. build — go 1.25 compiles a static binary with -mod=vendor so the
 #              local replace directive for corp-ui SDK works in Docker.
-#              You MUST run `make vendor` (or `go mod vendor`) before
-#              docker build, otherwise this stage fails with
-#              "package … not in vendor directory".
+#              vendor/ is committed, so a clean checkout builds as-is. If you
+#              change deps, run `make vendor` and commit the vendor/ delta
+#              (a stale tree fails with "package … not in vendor directory"
+#              or a go.mod/modules.txt mismatch).
 #   3. run   — minimal Alpine image. ca-certificates so the binary can
 #              hit corp-ui over HTTPS; tini so SIGTERM reaches the Go
 #              process and bbolt closes cleanly. Non-root user 10001.

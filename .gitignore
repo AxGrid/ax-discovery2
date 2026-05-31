@@ -15,9 +15,10 @@ ui/web/dist/
 /.kamal/secrets.development
 /.kamal/secrets.production
 
-# Vendored deps. Regenerate locally with `make vendor` before deploying
-# (or run `kamal build` which depends on it).
-/vendor/
+# NOTE: /vendor is committed. The corp-ui SDK is a local-path replace
+# (../corp-ui/sdk/go), so it can't be fetched from a proxy — a committed vendor
+# tree is the only way `-mod=vendor` (the Dockerfile) builds off this machine.
+# After changing deps: `make vendor` then commit the vendor/ delta.
 
 # Local Unsible state (not used; we deploy via Kamal).
 /unsible.yaml

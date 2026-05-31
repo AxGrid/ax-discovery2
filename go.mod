@@ -15,7 +15,7 @@ require (
 	golang.org/x/time v0.6.0
 )
 
-replace github.com/corp-ui/corp-ui/sdk/go => /Users/zed/GoLang/corp-ui/sdk/go
+replace github.com/corp-ui/corp-ui/sdk/go => ../corp-ui/sdk/go
 
 require (
 	github.com/armon/go-metrics v0.0.0-20180917152333-f0300d1749da // indirect

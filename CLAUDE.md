@@ -37,8 +37,10 @@ The companion Go client library is its own repo at
 - **Backend:** Go 1.25, `go.etcd.io/bbolt`, `hashicorp/memberlist`,
   `gorilla/websocket`, `Masterminds/semver/v3`, `golang.org/x/crypto/acme/autocert`,
   `joho/godotenv`, `google/uuid`, `axgrid/ax-router2/client`. Standard `net/http`
-  (no chi/gin) — Go 1.22+ pattern matching. Vendored (`/vendor` gitignored;
-  `make vendor` regenerates before a Docker/Kamal build).
+  (no chi/gin) — Go 1.22+ pattern matching. **`/vendor` is committed** — the
+  corp-ui SDK is a local-path replace (`../corp-ui/sdk/go`), not proxy-fetchable,
+  so the `-mod=vendor` Docker build needs the tree in git. After a dep change:
+  `make vendor` then commit the vendor/ delta.
 - **Per-instance health modes:** `heartbeat` (default), `http`, `tcp`, `none`.
   Stored on `Instance.CheckMode` + `Instance.CheckIntervalSec`. Single
   ticker dispatches per mode (see `internal/health/health.go`). HTTP/TCP
